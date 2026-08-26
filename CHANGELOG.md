@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `mkf validate CONFIG --against spec.yaml` reports where a mock and an OpenAPI
+  3 document disagree: a path or method the spec does not declare, a status code
+  it does not list, a response field it does not know - naming the closest one
+  it does, which is what a renamed field looks like from this side - a required
+  field the response omits, and a field of the wrong type. It compares the
+  response a route really produces, templates rendered and rows read, and exits
+  non-zero on any difference. Operations no route answers are counted on a final
+  line rather than reported one by one, because mocking part of an API is
+  normal.
+
 - `mkf init --from-openapi spec.yaml` writes a configuration from an OpenAPI 3
   document. Each operation becomes a route answering the lowest success status
   the spec declares, and response schemas map onto the templates MockyFast

@@ -9,6 +9,7 @@ import yaml
 
 from mockyfast.app import create_app, describe_routes
 from mockyfast.config import collect_warnings, load_config_source
+from mockyfast.conformance import check_against_spec
 from mockyfast.explain import describe_response, explain_request
 from mockyfast.models import config_json_schema, validate_shape
 from mockyfast.openapi import build_openapi
@@ -212,17 +213,48 @@ def openapi_command(
     typer.echo(f"OpenAPI document written to: {output}")
 
 
+def echo_conformance(config: dict, config_path: str, against: str) -> bool:
+    """Report how the mock and an OpenAPI document disagree. True when they do."""
+    try:
+        document = load_openapi_document(Path(against))
+        report = check_against_spec(config, config_path, document)
+    except Exception as exc:
+        typer.echo(f"Cannot read the OpenAPI document: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    for problem in report.problems:
+        typer.echo(f"Not conformant: {problem}")
+
+    typer.echo(f"Checked {report.checked_routes} route(s) against the spec.")
+
+    if report.uncovered_operations:
+        typer.echo(
+            f"The spec declares {report.uncovered_operations} operation(s) that "
+            f"no route answers."
+        )
+
+    return bool(report.problems)
+
+
 @app.command("validate")
 def validate_command(
     config: str = typer.Argument(..., help="Path to the YAML file, or a data file/folder"),
+    against: str = typer.Option(
+        None,
+        "--against",
+        help="Check what the mock answers against an OpenAPI 3 document",
+    ),
 ) -> None:
     """
     Validate the configuration file.
     """
-    loaded, _ = load_or_exit(config)
+    loaded, resolved_path = load_or_exit(config)
 
     echo_warnings(loaded)
     typer.echo("Configuration is valid.")
+
+    if against and echo_conformance(loaded, resolved_path, against):
+        raise typer.Exit(code=1)
 
 
 def parse_header_options(values: list[str] | None) -> dict[str, str]:

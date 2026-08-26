@@ -51,6 +51,8 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - `validate` checks the config before the server starts, and warns about
   unreachable routes
 - `explain` shows which route answers a request, and why the others do not
+- `validate --against spec.yaml` reports where the mock and a real spec
+  disagree
 - `schema` publishes a JSON Schema, for autocompletion and live validation in
   your editor
 - a real OpenAPI document at `/openapi.json`, browsable at `/docs`, built from
@@ -184,7 +186,7 @@ mkf serve mockyfast.yaml --port 8000
 mkf init     [--output FILE] [--from-data PATH | --from-openapi FILE]
 mkf schema   [--output FILE]
 mkf openapi  CONFIG [--output FILE]
-mkf validate CONFIG
+mkf validate CONFIG [--against SPEC]
 mkf serve    CONFIG [--host HOST] [--port PORT] [--reload] [--no-index] [--no-cors]
 mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
 ```
@@ -201,6 +203,7 @@ mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
 | `serve` | `--reload` | Restart when the config or its data files change |
 | `serve` | `--no-index` | Do not serve the generated route index at `/` (on by default) |
 | `serve` | `--no-cors` | Do not send permissive CORS headers (on by default) |
+| `validate` | `--against <file>` | Check what the mock answers against an OpenAPI 3 document |
 | `explain` | `-H` / `--header` | Request header as `'Name: value'`; repeatable |
 | `explain` | `--body '{...}'` | JSON request body |
 
@@ -1155,6 +1158,53 @@ half-imported.
 
 ---
 
+### Checking a mock against the spec
+
+A mock drifts quietly. A field gets renamed in the real API, a status code is
+added, and the mock keeps answering what it always did, so the tests written
+against it keep passing while the client breaks.
+
+```bash
+mkf validate mockyfast.yaml --against ./openapi.yaml
+```
+
+```text
+Configuration is valid.
+Not conformant: Route #1 GET /users: field '[].fullName' is not declared in the spec. The spec declares 'name'.
+Not conformant: Route #1 GET /users: field '[].name' is required by the spec, and the response does not carry it.
+Not conformant: Route #3 GET /users/{user_id}: the spec declares no status 418 for it, only 200, 404.
+Checked 6 route(s) against the spec.
+The spec declares 12 operation(s) that no route answers.
+```
+
+What is compared is the response a route really produces - templates rendered,
+rows read from the data file - not the configuration that describes it. The
+command exits non-zero when anything is not conformant, so it belongs in CI
+next to the tests.
+
+It reports:
+
+- a route answering a path, or a method, the spec does not declare
+- a status code the operation does not declare, `2XX` wildcards and `default`
+  included, counting `not_found_status` and an injected `fault` too
+- a response field the spec does not declare, naming the closest one it does,
+  which is what a rename looks like from this side
+- a field the spec requires that the response does not carry
+- a field whose type is not the declared one
+
+A path parameter may be named differently on each side: `/users/{user_id}` and
+`/users/{id}` are the same operation.
+
+Two things are deliberately left alone. A placeholder that could not be
+rendered, such as `{user_id}`, says nothing about its type. A `oneOf` or an
+`anyOf` says the value may take several shapes, and reporting it against the
+first would be guessing.
+
+The last line counts the operations the spec declares that no route answers.
+That is a note, not a failure: mocking part of an API is a normal thing to do.
+
+---
+
 ## Explaining a request
 
 When a request does not reach the route you expected, `mkf explain` walks the
@@ -1268,6 +1318,9 @@ This helps catch issues like:
 
 It also reports warnings that do not make a config invalid, such as a route
 made unreachable by an earlier, more general one.
+
+With `--against`, it goes on to compare what the mock answers with an OpenAPI
+document; see [checking a mock against the spec](#checking-a-mock-against-the-spec).
 
 ---
 

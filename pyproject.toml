@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi",
+  # The configuration models; FastAPI already pulls it in, but this package
+  # imports it directly.
+  "pydantic>=2",
   "uvicorn",
   "typer",
   "pyyaml",
@@ -16,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  # `mkf schema` publishes a JSON Schema; the tests check it is a real one.
+  "jsonschema",
   "pytest-cov",
   "httpx",
   "ruff",

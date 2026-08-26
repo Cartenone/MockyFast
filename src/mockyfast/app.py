@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from mockyfast.config import load_config_source, load_json_file
+from mockyfast.config import iter_route_responses, load_config_source, load_json_file
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
 from mockyfast.faults import (
@@ -210,18 +210,6 @@ def build_fault_outcome(fault: dict) -> ResponseOutcome:
         status_code=fault_status_code(fault),
         delay_ms=fault_delay_ms(fault),
     )
-
-
-def iter_route_responses(route: dict):
-    """Every response a route can produce, sequence entries included."""
-    if route.get("responses"):
-        yield from route["responses"]
-        return
-
-    response = route.get("response")
-
-    if response:
-        yield response
 
 
 def seed_mutable_store_for_route(

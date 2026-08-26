@@ -1,0 +1,19 @@
+routes:
+  - method: GET
+    path: /orders
+    request:
+      query:
+        status: shipped
+    response:
+      status_code: 200
+      body:
+        items:
+          - id: 1
+            status: shipped
+
+  - method: GET
+    path: /orders
+    response:
+      status_code: 200
+      body:
+        items: []

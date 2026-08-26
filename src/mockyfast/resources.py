@@ -11,15 +11,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-DEFAULT_KEY_FIELD = "id"
+from mockyfast.models import RESOURCE_ACTIONS, validate_shape
 
-SUPPORTED_SOURCE_TYPES = {"csv", "json"}
+DEFAULT_KEY_FIELD = "id"
 
 DATA_FILE_SUFFIXES = {".json": "json", ".csv": "csv"}
 
 # Each action maps to the HTTP methods it generates and whether it addresses a
 # single resource (and therefore needs a path parameter).
-RESOURCE_ACTIONS: dict[str, tuple[tuple[str, ...], bool]] = {
+ACTION_ROUTES: dict[str, tuple[tuple[str, ...], bool]] = {
     "list": (("GET",), False),
     "get": (("GET",), True),
     "create": (("POST",), False),
@@ -27,7 +27,7 @@ RESOURCE_ACTIONS: dict[str, tuple[tuple[str, ...], bool]] = {
     "delete": (("DELETE",), True),
 }
 
-DEFAULT_ACTIONS = ["list", "get", "create", "update", "delete"]
+DEFAULT_ACTIONS = list(RESOURCE_ACTIONS)
 
 
 def where_key_for(source_type: str) -> str:
@@ -57,51 +57,7 @@ def apply_not_found(data_source: dict, resource: dict) -> None:
         data_source["not_found_body"] = resource["not_found_body"]
 
 
-def validate_resource(resource: Any, index: int) -> None:
-    label = f"Resource #{index}"
-
-    if not isinstance(resource, dict):
-        raise ValueError(f"{label} must be an object.")
-
-    name = resource.get("name")
-    if not isinstance(name, str) or not name:
-        raise ValueError(f"'name' in {label.lower()} must be a non-empty string.")
-
-    path = resource.get("path", f"/{name}")
-    if not isinstance(path, str) or not path.startswith("/"):
-        raise ValueError(
-            f"'path' in {label.lower()} must be a string starting with '/'."
-        )
-
-    source = resource.get("source")
-    if not isinstance(source, dict):
-        raise ValueError(f"'source' in {label.lower()} must be an object.")
-
-    if source.get("type") not in SUPPORTED_SOURCE_TYPES:
-        raise ValueError(f"'source.type' in {label.lower()} must be 'csv' or 'json'.")
-
-    if not isinstance(source.get("file"), str):
-        raise ValueError(f"'source.file' in {label.lower()} must be a string.")
-
-    key_field = resource.get("key_field", DEFAULT_KEY_FIELD)
-    if not isinstance(key_field, str) or not key_field:
-        raise ValueError(f"'key_field' in {label.lower()} must be a non-empty string.")
-
-    actions = resource.get("methods", DEFAULT_ACTIONS)
-    if not isinstance(actions, list) or not actions:
-        raise ValueError(f"'methods' in {label.lower()} must be a non-empty list.")
-
-    for action in actions:
-        if action not in RESOURCE_ACTIONS:
-            allowed = ", ".join(DEFAULT_ACTIONS)
-            raise ValueError(
-                f"'methods' in {label.lower()} must only contain: {allowed}."
-            )
-
-
-def build_resource_routes(resource: dict, index: int) -> list[dict[str, Any]]:
-    validate_resource(resource, index)
-
+def build_resource_routes(resource: dict) -> list[dict[str, Any]]:
     name = resource["name"]
     path = resource.get("path", f"/{name}")
     source = resource["source"]
@@ -119,7 +75,7 @@ def build_resource_routes(resource: dict, index: int) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
 
     for action in actions:
-        methods, targets_one = RESOURCE_ACTIONS[action]
+        methods, targets_one = ACTION_ROUTES[action]
 
         for method in methods:
             data_source = build_data_source(source_type, file_path, key_field, name)
@@ -167,14 +123,13 @@ def expand_resources(config: dict) -> dict:
     if resources is None:
         return config
 
-    if not isinstance(resources, list):
-        raise ValueError("'resources' must be a list.")
+    validate_shape({"resources": resources})
 
     generated: list[dict[str, Any]] = []
     seen_names: dict[str, int] = {}
 
     for index, resource in enumerate(resources, start=1):
-        routes = build_resource_routes(resource, index)
+        routes = build_resource_routes(resource)
         name = resource["name"]
 
         # The name is the store identity, so two resources sharing it would

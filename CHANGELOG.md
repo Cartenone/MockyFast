@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `mkf schema` prints a JSON Schema of the configuration format, generated from
+  the same models `mkf validate` runs. `mockyfast.schema.json` is published in
+  the repository, so an editor can be pointed at it with a
+  `# yaml-language-server: $schema=` modeline or a `yaml.schemas` entry in
+  `.vscode/settings.json` and offer completion and live validation.
+- An optional `version: 1` at the top of a configuration, so the format can
+  change later without breaking files written today. A version this build does
+  not know is refused rather than misread.
+- Every YAML example in the README, and the ten the first published README
+  documented, are now loaded by the test suite, so a documented configuration
+  cannot stop being a working one.
+
 - `mkf explain CONFIG METHOD PATH` reports which route answers a request and why
   each other one does not, naming the failing query parameter, header or body
   field. Accepts `-H` headers and a `--body`, and exits non-zero when nothing
@@ -71,6 +83,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resource opened it six times at startup. It is now read once.
 
 ### Changed
+
+- Configuration validation is now a set of Pydantic models rather than 450 lines
+  of hand-written checks, which is what makes a publishable JSON Schema
+  possible. Messages keep their wording, and gain a key path that points at the
+  entry at fault: an error inside a `responses:` sequence now reads
+  `'responses.1.status_code' in route #1` instead of naming the route only.
+- A missing key and a key of the wrong type no longer share a message. A
+  resource without a `source` reported `'source' in resource #1 must be an
+  object`, which described something that was not there; it now reports
+  `'source' in resource #1 is required`.
+- An unknown key is rejected instead of ignored. `stauts_code: 201` used to
+  leave the route answering `200` with no warning, and now fails `validate`
+  naming the key.
+- A key written but left empty is rejected wherever a value is required.
+  `mutable:`, `wrap:` or `request:` with nothing after them used to pass
+  validation and then be treated as absent.
 
 - `PUT` now replaces a mutable resource and `PATCH` merges into it, instead of
   both merging. The key field survives either way.

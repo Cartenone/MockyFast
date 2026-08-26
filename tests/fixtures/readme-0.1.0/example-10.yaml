@@ -1,0 +1,8 @@
+routes:
+  - method: GET
+    path: /slow
+    response:
+      status_code: 200
+      delay_ms: 3000
+      body:
+        ok: true

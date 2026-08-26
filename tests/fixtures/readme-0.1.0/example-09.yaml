@@ -1,0 +1,18 @@
+routes:
+  - method: POST
+    path: /login
+    request:
+      json:
+        username: admin
+        password: secret
+    response:
+      status_code: 200
+      body:
+        token: fake-jwt-token
+
+  - method: POST
+    path: /login
+    response:
+      status_code: 401
+      body:
+        error: invalid_credentials

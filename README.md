@@ -50,6 +50,8 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - `validate` checks the config before the server starts, and warns about
   unreachable routes
 - `explain` shows which route answers a request, and why the others do not
+- `schema` publishes a JSON Schema, for autocompletion and live validation in
+  your editor
 - permissive CORS by default, so a browser app can call the mock
 - automated tests with `pytest`
 
@@ -70,7 +72,9 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - **Behaviour**: [request matching](#request-matching) ·
   [latency and faults](#latency-and-faults) ·
   [notes](#behaviour-notes)
-- **Tooling**: [validation](#validation) · [explain](#explaining-a-request) ·
+- **Tooling**: [validation](#validation) ·
+  [editor support](#editor-support) ·
+  [explain](#explaining-a-request) ·
   [development](#development)
 
 ---
@@ -85,7 +89,63 @@ cd MockyFast
 pip install .
 ```
 
-### Development install
+### Editor support
+
+`mkf schema` prints a JSON Schema generated from the same models `mkf validate`
+runs, so your editor and the CLI cannot disagree about what a configuration may
+contain:
+
+```bash
+mkf schema > mockyfast.schema.json
+```
+
+The generated file is also published in this repository, at
+[`mockyfast.schema.json`](./mockyfast.schema.json), so you can point at it
+without generating anything.
+
+### One file at a time
+
+Put a modeline at the top of the configuration. The
+[YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
+for VS Code reads it, as does any editor speaking the YAML language server
+protocol:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json
+
+version: 1
+
+routes:
+  - method: GET
+    path: /health
+    response:
+      status_code: 200
+      body:
+        ok: true
+```
+
+### Every config in a project
+
+In `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json": [
+      "mockyfast.yaml",
+      "mocks/**/*.yaml"
+    ]
+  }
+}
+```
+
+Either form accepts a local file too: replace the URL with
+`./mockyfast.schema.json` and the editor validates against the schema of the
+version you have installed.
+
+---
+
+## Development install
 
 ```bash
 pip install -e ".[dev]"
@@ -102,6 +162,7 @@ mockyfast init
 mockyfast validate mockyfast.yaml
 mockyfast serve mockyfast.yaml --port 8000
 mockyfast explain mockyfast.yaml GET /users/1
+mockyfast schema > mockyfast.schema.json
 ```
 
 ### Short alias
@@ -116,6 +177,7 @@ mkf serve mockyfast.yaml --port 8000
 
 ```text
 mkf init     [--output FILE] [--from-data PATH]
+mkf schema   [--output FILE]
 mkf validate CONFIG
 mkf serve    CONFIG [--host HOST] [--port PORT] [--reload] [--no-index] [--no-cors]
 mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
@@ -125,6 +187,7 @@ mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
 |---|---|---|
 | `init` | `--output <file>` | Where to write the config (default `mockyfast.yaml`) |
 | `init` | `--from-data <path>` | Generate the config from a data file or folder |
+| `schema` | `-o` / `--output <file>` | Write the JSON Schema to a file instead of standard output |
 | `serve` | `--host` | Bind address (default `127.0.0.1`) |
 | `serve` | `--port` | Bind port (default `8000`) |
 | `serve` | `--reload` | Restart when the config or its data files change |
@@ -206,6 +269,29 @@ routes:
       body:
         ok: true
 ```
+
+---
+
+## The `version` key
+
+A configuration can declare the format version it was written against:
+
+```yaml
+version: 1
+
+routes:
+  - method: GET
+    path: /health
+    response:
+      status_code: 200
+      body:
+        ok: true
+```
+
+It is optional, and `1` is the only version MockyFast reads today. Writing it
+down means a later change to the format can be introduced without breaking this
+file: a version this build does not know is refused with a message instead of
+being misread.
 
 ---
 
@@ -1078,6 +1164,9 @@ This helps catch issues like:
 - a route defining both `response` and `responses`, or an empty `responses`
 - invalid `fault` settings
 - `persist` without `mutable`
+- unknown keys, which are almost always typos
+- a key written but left empty, where a value is required
+- an unsupported `version`
 
 It also reports warnings that do not make a config invalid, such as a route
 made unreachable by an earlier, more general one.
@@ -1110,7 +1199,6 @@ ruff check .
 
 Planned improvements:
 
-- a published JSON Schema for the config, for editor autocompletion
 - OpenAPI import, to generate mocks from an existing spec
 - an admin API to reset state and inspect received requests
 - richer body matching (JSONPath)

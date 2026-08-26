@@ -1,0 +1,15 @@
+routes:
+  - method: GET
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mode: first
+        where:
+          column: id
+          equals_path_param: user_id
+        schema:
+          id: int
+          active: bool
+          balance: float

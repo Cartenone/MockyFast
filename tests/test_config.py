@@ -1103,3 +1103,105 @@ routes:
         match="'response.data_source.mode' in route #1 must be 'first' or 'all'",
     ):
         load_config(config_path)
+
+
+# --------------------------------------------------- version and unknown keys
+
+
+def test_a_config_declaring_version_1_loads(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+version: 1
+routes:
+  - method: GET
+    path: /x
+    response:
+      body:
+        ok: true
+""",
+    )
+
+    assert load_config(config_path)["version"] == 1
+
+
+def test_a_config_declaring_an_unsupported_version_is_rejected(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+version: 2
+routes:
+  - method: GET
+    path: /x
+    response:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(ValueError, match="'version' must be 1"):
+        load_config(config_path)
+
+
+def test_an_unknown_top_level_key_is_rejected(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+rotues:
+  - method: GET
+    path: /x
+routes:
+  - method: GET
+    path: /x
+    response:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(ValueError, match="'rotues' is not a known configuration key"):
+        load_config(config_path)
+
+
+def test_an_unknown_response_key_is_rejected(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      stauts_code: 201
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.stauts_code' in route #1 is not a known configuration key",
+    ):
+        load_config(config_path)
+
+
+def test_an_error_in_a_sequence_names_the_entry_that_caused_it(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    responses:
+      - body:
+          ok: true
+      - status_code: 99
+        body:
+          ok: false
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'responses.1.status_code' in route #1 must be a valid HTTP status code",
+    ):
+        load_config(config_path)

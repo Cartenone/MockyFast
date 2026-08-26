@@ -1,0 +1,17 @@
+routes:
+  - method: GET
+    path: /profile
+    request:
+      headers:
+        Authorization: Bearer secret-token
+    response:
+      status_code: 200
+      body:
+        user: mario
+
+  - method: GET
+    path: /profile
+    response:
+      status_code: 401
+      body:
+        error: unauthorized

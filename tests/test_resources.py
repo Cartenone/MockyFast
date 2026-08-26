@@ -195,7 +195,7 @@ def test_create_route_gets_a_201_status(tmp_path):
     [
         ("resources: {}", "'resources' must be a list"),
         ("resources:\n  - source: {type: json, file: ./data/users.json}", "'name' in resource #1"),
-        ("resources:\n  - name: users", "'source' in resource #1 must be an object"),
+        ("resources:\n  - name: users", "'source' in resource #1 is required"),
         (
             "resources:\n  - name: users\n    source: {type: xml, file: ./data/users.json}",
             "'source.type' in resource #1",

@@ -1,0 +1,6 @@
+routes:
+  - method: GET
+    path: /users
+    response:
+      status_code: 200
+      body_from: ./responses/users.json

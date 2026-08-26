@@ -1,0 +1,23 @@
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mode: all
+        wrap: items
+
+  - method: GET
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mode: first
+        where:
+          column: id
+          equals_path_param: user_id
+        not_found_status: 404
+        not_found_body:
+          error: user_not_found

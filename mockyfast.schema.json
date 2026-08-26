@@ -1,0 +1,494 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json",
+  "$defs": {
+    "DataSource": {
+      "additionalProperties": false,
+      "description": "A response built from a CSV or JSON file next to the configuration.",
+      "properties": {
+        "type": {
+          "description": "Format of the data file.",
+          "enum": [
+            "csv",
+            "json"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "file": {
+          "description": "Data file, relative to the configuration file.",
+          "title": "File",
+          "type": "string"
+        },
+        "mode": {
+          "description": "'all' returns a list, 'first' a single object. Required except on a write route of a mutable source.",
+          "enum": [
+            "first",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "where": {
+          "$ref": "#/$defs/Where",
+          "description": "Filter rows by a path or query parameter."
+        },
+        "wrap": {
+          "description": "Wrap the result under this key.",
+          "title": "Wrap",
+          "type": "string"
+        },
+        "not_found_status": {
+          "description": "Status used when 'mode: first' finds nothing. Defaults to 404.",
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Not Found Status",
+          "type": "integer"
+        },
+        "not_found_body": {
+          "description": "Body used when 'mode: first' finds nothing.",
+          "title": "Not Found Body"
+        },
+        "coerce_types": {
+          "description": "CSV only: infer primitive types from the text.",
+          "title": "Coerce Types",
+          "type": "boolean"
+        },
+        "schema": {
+          "additionalProperties": {
+            "enum": [
+              "str",
+              "int",
+              "float",
+              "bool"
+            ],
+            "type": "string"
+          },
+          "description": "CSV only: explicit column-to-type mapping.",
+          "title": "Schema",
+          "type": "object"
+        },
+        "list_query": {
+          "description": "Allow filtering, sorting and paging on a 'mode: all' route.",
+          "title": "List Query",
+          "type": "boolean"
+        },
+        "mutable": {
+          "description": "Serve the file from a writable in-memory store.",
+          "title": "Mutable",
+          "type": "boolean"
+        },
+        "persist": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Keep writes across restarts: true, or a path for the state file.",
+          "title": "Persist"
+        },
+        "key_field": {
+          "description": "Primary key of a mutable resource.",
+          "title": "Key Field",
+          "type": "string"
+        },
+        "resource_name": {
+          "description": "Store identity shared by every route of a resource.",
+          "title": "Resource Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "file"
+      ],
+      "title": "DataSource",
+      "type": "object"
+    },
+    "DelayRange": {
+      "additionalProperties": false,
+      "description": "Latency drawn from a range, so it varies from call to call.",
+      "properties": {
+        "min": {
+          "description": "Lower bound, in milliseconds.",
+          "minimum": 0,
+          "title": "Min",
+          "type": "integer"
+        },
+        "max": {
+          "description": "Upper bound, in milliseconds.",
+          "minimum": 0,
+          "title": "Max",
+          "type": "integer"
+        }
+      },
+      "title": "DelayRange",
+      "type": "object"
+    },
+    "Fault": {
+      "additionalProperties": false,
+      "description": "A failure injected in place of the normal response.",
+      "properties": {
+        "probability": {
+          "description": "Chance the fault fires, from 0 to 1.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Probability",
+          "type": "number"
+        },
+        "status_code": {
+          "description": "Status of the fault response. Defaults to 500.",
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Status Code",
+          "type": "integer"
+        },
+        "body": {
+          "description": "Body of the fault response.",
+          "title": "Body"
+        },
+        "delay_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/DelayRange"
+            }
+          ],
+          "description": "Time the fault takes; use it to simulate a timeout.",
+          "title": "Delay Ms"
+        }
+      },
+      "title": "Fault",
+      "type": "object"
+    },
+    "RequestMatch": {
+      "additionalProperties": false,
+      "description": "Conditions a request must meet for the route to answer.",
+      "properties": {
+        "query": {
+          "additionalProperties": true,
+          "description": "Expected query parameters, compared as text.",
+          "title": "Query",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": true,
+          "description": "Expected headers, compared as text and case-insensitively.",
+          "title": "Headers",
+          "type": "object"
+        },
+        "json": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "items": {},
+              "type": "array"
+            }
+          ],
+          "description": "Expected JSON body; object keys match partially, lists exactly.",
+          "title": "Json"
+        }
+      },
+      "title": "RequestMatch",
+      "type": "object"
+    },
+    "Resource": {
+      "additionalProperties": false,
+      "description": "A CRUD resource that expands into routes before validation.",
+      "properties": {
+        "name": {
+          "description": "Resource name, also the identity of its store.",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "description": "Base path of the collection. Defaults to /<name>.",
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ResourceSource",
+          "description": "The data file backing the resource."
+        },
+        "key_field": {
+          "description": "Primary key, also the path parameter name. Defaults to 'id'.",
+          "minLength": 1,
+          "title": "Key Field",
+          "type": "string"
+        },
+        "methods": {
+          "description": "Actions to generate. Defaults to all of them.",
+          "items": {
+            "enum": [
+              "list",
+              "get",
+              "create",
+              "update",
+              "delete"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Methods",
+          "type": "array"
+        },
+        "wrap": {
+          "description": "Wrap the list route's result under this key.",
+          "title": "Wrap",
+          "type": "string"
+        },
+        "not_found_status": {
+          "description": "Status of the single-resource routes when nothing matches.",
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Not Found Status",
+          "type": "integer"
+        },
+        "not_found_body": {
+          "description": "Body of the single-resource routes when nothing matches.",
+          "title": "Not Found Body"
+        },
+        "delay_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/DelayRange"
+            }
+          ],
+          "description": "Latency applied to every generated route.",
+          "title": "Delay Ms"
+        },
+        "list_query": {
+          "description": "Filtering, sorting and paging on the list route. On by default.",
+          "title": "List Query",
+          "type": "boolean"
+        },
+        "persist": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Keep writes across restarts: true, or a path for the state file.",
+          "title": "Persist"
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "title": "Resource",
+      "type": "object"
+    },
+    "ResourceSource": {
+      "additionalProperties": false,
+      "description": "The data file backing a resource.",
+      "properties": {
+        "type": {
+          "description": "Format of the data file.",
+          "enum": [
+            "csv",
+            "json"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "file": {
+          "description": "Data file, relative to the configuration file.",
+          "title": "File",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "file"
+      ],
+      "title": "ResourceSource",
+      "type": "object"
+    },
+    "Response": {
+      "additionalProperties": false,
+      "description": "What a matched route answers.",
+      "properties": {
+        "status_code": {
+          "description": "HTTP status of the response. Defaults to 200.",
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Status Code",
+          "type": "integer"
+        },
+        "body": {
+          "description": "Inline response body.",
+          "title": "Body"
+        },
+        "body_from": {
+          "description": "JSON file holding the whole body, relative to the configuration.",
+          "title": "Body From",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSource",
+          "description": "Build the body from a CSV or JSON file."
+        },
+        "delay_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/DelayRange"
+            }
+          ],
+          "description": "Latency before answering: a number, or a {min, max} range.",
+          "title": "Delay Ms"
+        },
+        "fault": {
+          "$ref": "#/$defs/Fault",
+          "description": "Replace the response with a failure."
+        }
+      },
+      "title": "Response",
+      "type": "object"
+    },
+    "Route": {
+      "additionalProperties": false,
+      "description": "One (method, path) pair and the response it produces.",
+      "properties": {
+        "method": {
+          "description": "HTTP method the route answers.",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD",
+            "OPTIONS",
+            "get",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "head",
+            "options"
+          ],
+          "title": "Method"
+        },
+        "path": {
+          "description": "Request path, starting with '/'.",
+          "pattern": "^/",
+          "title": "Path",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/RequestMatch",
+          "description": "Conditions the request must meet."
+        },
+        "response": {
+          "$ref": "#/$defs/Response",
+          "description": "The response to return."
+        },
+        "responses": {
+          "description": "Responses returned on successive calls; the last one repeats.",
+          "items": {
+            "$ref": "#/$defs/Response"
+          },
+          "minItems": 1,
+          "title": "Responses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "title": "Route",
+      "type": "object"
+    },
+    "Where": {
+      "additionalProperties": false,
+      "description": "Which row of a data source a request addresses.",
+      "properties": {
+        "column": {
+          "description": "CSV column to compare.",
+          "title": "Column",
+          "type": "string"
+        },
+        "field": {
+          "description": "JSON field to compare.",
+          "title": "Field",
+          "type": "string"
+        },
+        "equals_path_param": {
+          "description": "Path parameter holding the expected value.",
+          "title": "Equals Path Param",
+          "type": "string"
+        },
+        "equals_query_param": {
+          "description": "Query parameter holding the expected value.",
+          "title": "Equals Query Param",
+          "type": "string"
+        }
+      },
+      "title": "Where",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Configuration for the MockyFast mock server. Generated from the Pydantic models with 'mkf schema'.",
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Configuration format version. Optional today; declaring it lets the format change without breaking this file.",
+      "title": "Version",
+      "type": "integer"
+    },
+    "routes": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Route"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Explicitly declared routes.",
+      "title": "Routes"
+    },
+    "resources": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Resource"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "CRUD resources, expanded into routes.",
+      "title": "Resources"
+    }
+  },
+  "title": "MockyFast configuration",
+  "type": "object"
+}

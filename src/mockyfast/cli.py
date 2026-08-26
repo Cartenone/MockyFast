@@ -10,6 +10,7 @@ import yaml
 from mockyfast.app import create_app, describe_routes
 from mockyfast.config import collect_warnings, load_config_source
 from mockyfast.explain import describe_response, explain_request
+from mockyfast.models import config_json_schema
 from mockyfast.resources import build_config_from_data
 
 app = typer.Typer(help="Serve API mocks from YAML")
@@ -111,6 +112,28 @@ def init_command(
 
     path.write_text(content, encoding="utf-8")
     typer.echo(f"Sample file created: {output}")
+
+
+@app.command("schema")
+def schema_command(
+    output: str = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write the schema to this file instead of standard output",
+    ),
+) -> None:
+    """
+    Print the JSON Schema of the configuration format.
+    """
+    content = json.dumps(config_json_schema(), indent=2)
+
+    if output is None:
+        typer.echo(content)
+        return
+
+    Path(output).write_text(content + "\n", encoding="utf-8")
+    typer.echo(f"Schema written to: {output}")
 
 
 @app.command("validate")

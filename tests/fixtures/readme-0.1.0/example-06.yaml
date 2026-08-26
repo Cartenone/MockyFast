@@ -1,0 +1,8 @@
+routes:
+  - method: GET
+    path: /users/{user_id}
+    response:
+      status_code: 200
+      body:
+        id: "{user_id}"
+        name: "User {user_id}"

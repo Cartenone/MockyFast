@@ -149,7 +149,7 @@ def validate_routes(config: dict, config_path: str) -> None:
         if "path" not in route:
             raise ValueError(f"Route #{index} is missing 'path'.")
 
-        if "response" not in route:
+        if "response" not in route and "responses" not in route:
             raise ValueError(f"Route #{index} is missing 'response'.")
 
         method = route["method"]
@@ -194,55 +194,124 @@ def validate_routes(config: dict, config_path: str) -> None:
 
             validate_matchers(request, index)
 
-        response = route["response"]
-
-        if not isinstance(response, dict):
-            raise ValueError(f"'response' in route #{index} must be an object.")
-
-        has_body = "body" in response
-        has_body_from = "body_from" in response
-        has_data_source = "data_source" in response
-
-        selected_response_sources = sum([has_body, has_body_from, has_data_source])
-
-        if selected_response_sources > 1:
+        if "response" in route and "responses" in route:
             raise ValueError(
-                f"Route #{index} can only define one of 'body', 'body_from', or 'data_source'."
+                f"Route #{index} cannot define both 'response' and 'responses'."
             )
 
-        if has_body_from:
-            load_json_file(config_path, response["body_from"])
+        if "responses" in route:
+            responses = route["responses"]
 
-        if has_data_source:
-            validate_data_source(response["data_source"], config_path, index, method)
-
-        # Checked by key presence: an explicit 'status_code:' with no value is a
-        # mistake, not an omission, and would reach JSONResponse as None.
-        if "status_code" in response:
-            status_code = response["status_code"]
-
-            if not is_integer(status_code):
+            if not isinstance(responses, list) or not responses:
                 raise ValueError(
-                    f"'response.status_code' in route #{index} must be an integer."
+                    f"'responses' in route #{index} must be a non-empty list."
                 )
 
-            if status_code < 100 or status_code > 599:
+            for response in responses:
+                validate_response(response, config_path, index, method)
+        else:
+            validate_response(route["response"], config_path, index, method)
+
+
+def validate_delay(delay: object, label: str, index: int) -> None:
+    """A delay is a fixed number of milliseconds or a {min, max} range."""
+    if isinstance(delay, dict):
+        for bound in ("min", "max"):
+            if bound not in delay:
+                continue
+
+            if not is_integer(delay[bound]) or delay[bound] < 0:
                 raise ValueError(
-                    f"'response.status_code' in route #{index} must be a valid HTTP status code."
+                    f"'{label}.{bound}' in route #{index} must be a "
+                    f"non-negative integer."
                 )
 
-        if "delay_ms" in response:
-            delay_ms = response["delay_ms"]
+        return
 
-            if not is_integer(delay_ms):
-                raise ValueError(
-                    f"'response.delay_ms' in route #{index} must be an integer."
-                )
+    if not is_integer(delay):
+        raise ValueError(f"'{label}' in route #{index} must be an integer.")
 
-            if delay_ms < 0:
-                raise ValueError(
-                    f"'response.delay_ms' in route #{index} cannot be negative."
-                )
+    if delay < 0:
+        raise ValueError(f"'{label}' in route #{index} cannot be negative.")
+
+
+def validate_fault(fault: object, index: int) -> None:
+    if not isinstance(fault, dict):
+        raise ValueError(f"'response.fault' in route #{index} must be an object.")
+
+    if "probability" in fault:
+        probability = fault["probability"]
+
+        if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+            raise ValueError(
+                f"'response.fault.probability' in route #{index} must be a number."
+            )
+
+        if probability < 0 or probability > 1:
+            raise ValueError(
+                f"'response.fault.probability' in route #{index} must be "
+                f"between 0 and 1."
+            )
+
+    if "status_code" in fault:
+        status_code = fault["status_code"]
+
+        if not is_integer(status_code) or status_code < 100 or status_code > 599:
+            raise ValueError(
+                f"'response.fault.status_code' in route #{index} must be a "
+                f"valid HTTP status code."
+            )
+
+    if "delay_ms" in fault:
+        validate_delay(fault["delay_ms"], "response.fault.delay_ms", index)
+
+
+def validate_response(
+    response: object,
+    config_path: str,
+    index: int,
+    method: str,
+) -> None:
+    if not isinstance(response, dict):
+        raise ValueError(f"'response' in route #{index} must be an object.")
+
+    has_body = "body" in response
+    has_body_from = "body_from" in response
+    has_data_source = "data_source" in response
+
+    selected_response_sources = sum([has_body, has_body_from, has_data_source])
+
+    if selected_response_sources > 1:
+        raise ValueError(
+            f"Route #{index} can only define one of 'body', 'body_from', or 'data_source'."
+        )
+
+    if has_body_from:
+        load_json_file(config_path, response["body_from"])
+
+    if has_data_source:
+        validate_data_source(response["data_source"], config_path, index, method)
+
+    # Checked by key presence: an explicit 'status_code:' with no value is a
+    # mistake, not an omission, and would reach JSONResponse as None.
+    if "status_code" in response:
+        status_code = response["status_code"]
+
+        if not is_integer(status_code):
+            raise ValueError(
+                f"'response.status_code' in route #{index} must be an integer."
+            )
+
+        if status_code < 100 or status_code > 599:
+            raise ValueError(
+                f"'response.status_code' in route #{index} must be a valid HTTP status code."
+            )
+
+    if "delay_ms" in response:
+        validate_delay(response["delay_ms"], "response.delay_ms", index)
+
+    if "fault" in response:
+        validate_fault(response["fault"], index)
 
 
 def validate_matchers(request: dict, index: int) -> None:

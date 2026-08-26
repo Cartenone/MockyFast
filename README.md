@@ -73,6 +73,7 @@ pip install -e ".[dev]"
 mockyfast init
 mockyfast validate mockyfast.yaml
 mockyfast serve mockyfast.yaml --port 8000
+mockyfast explain mockyfast.yaml GET /users/1
 ```
 
 ### Short alias
@@ -92,6 +93,8 @@ mkf serve mockyfast.yaml --port 8000
 | `serve` | `--no-index` | Do not serve the generated route index at `/` |
 | `serve` | `--no-cors` | Do not send permissive CORS headers |
 | `serve` | `--host` / `--port` | Bind address (defaults `127.0.0.1:8000`) |
+| `explain` | `-H 'Name: value'` | Request header; repeatable |
+| `explain` | `--body '{...}'` | JSON request body |
 
 `validate` and `serve` accept either a YAML config, a data folder, or a single
 data file.
@@ -842,28 +845,124 @@ Matching is partial for `query` and `headers` (extra values in the request are i
 
 ---
 
-## Delayed responses
+## Latency and faults
 
-You can simulate slow APIs using `delay_ms`.
+`delay_ms` takes a fixed number of milliseconds, or a range for latency that
+varies from call to call:
 
 ```yaml
 routes:
   - method: GET
     path: /slow
     response:
-      status_code: 200
       delay_ms: 3000
+      body:
+        ok: true
+
+  - method: GET
+    path: /jittery
+    response:
+      delay_ms:
+        min: 50
+        max: 800
       body:
         ok: true
 ```
 
-The delay applies to every response the route produces, including not-found and CRUD responses.
+The delay applies to every response the route produces, including not-found and
+CRUD responses.
 
-This is useful when you want to simulate:
+`fault` replaces the normal response some of the time, which is how you exercise
+a client's retry and timeout handling:
 
-- slow services
-- network latency
-- client-side timeouts
+```yaml
+routes:
+  - method: GET
+    path: /flaky
+    response:
+      body:
+        ok: true
+      fault:
+        probability: 0.2
+        status_code: 503
+        body:
+          error: overloaded
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `probability` | `1` | Chance the fault fires, from `0` to `1` |
+| `status_code` | `500` | Status of the fault response |
+| `body` | `{"detail": "Injected fault"}` | Body of the fault response |
+| `delay_ms` | route delay | Time the fault takes; use it to simulate a timeout |
+
+Declaring `fault: {}` is enough to fail every call with the defaults.
+
+---
+
+## Response sequences
+
+Use `responses:` instead of `response:` to answer differently on successive
+calls, which is what a polling client needs to be tested against:
+
+```yaml
+routes:
+  - method: GET
+    path: /jobs/{job_id}
+    responses:
+      - status_code: 202
+        body:
+          status: accepted
+      - status_code: 202
+        body:
+          status: running
+      - status_code: 200
+        body:
+          status: done
+```
+
+```bash
+curl http://127.0.0.1:8000/jobs/7   # 202 accepted
+curl http://127.0.0.1:8000/jobs/7   # 202 running
+curl http://127.0.0.1:8000/jobs/7   # 200 done
+curl http://127.0.0.1:8000/jobs/7   # 200 done, the last entry repeats
+```
+
+Each entry is a full response object: `status_code`, `body`, `body_from`,
+`delay_ms`, `fault` and templates all work inside one. The position is counted
+**per route**, not per path parameter, and resets when the server restarts.
+
+---
+
+## Explaining a request
+
+When a request does not reach the route you expected, `mkf explain` walks the
+same decisions the server makes:
+
+```bash
+mkf explain mockyfast.yaml GET /users/me
+```
+
+```text
+GET /users/me
+
+   route #1  GET /users  -  path does not match
+-> route #2  GET /users/{user_id}  -  matches
+ ~ route #3  GET /users/me  -  would match, but an earlier route answers first
+
+Answered by route #2: inline body
+Path parameters: user_id=me
+```
+
+`->` marks the winner, `~` marks a route that would match but is unreachable.
+Headers and a body can be supplied so matchers are evaluated too:
+
+```bash
+mkf explain mockyfast.yaml POST /login --body '{"username":"admin","password":"wrong"}'
+mkf explain mockyfast.yaml GET '/orders?status=shipped' -H 'Authorization: Bearer abc'
+```
+
+The command exits non-zero when no route answers, so it can be used as a check.
 
 ---
 

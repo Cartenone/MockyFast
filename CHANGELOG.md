@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `mkf explain CONFIG METHOD PATH` reports which route answers a request and why
+  each other one does not, naming the failing query parameter, header or body
+  field. Accepts `-H` headers and a `--body`, and exits non-zero when nothing
+  matches.
+- `responses:` answers differently on successive calls, for testing polling
+  clients. The last entry repeats once the sequence runs out.
+- `fault` replaces a response with a failure, with an optional `probability`,
+  `status_code`, `body` and its own `delay_ms` for simulating timeouts.
+- `delay_ms` accepts a `{min, max}` range for latency that varies per call.
+
 - Response templates: `{{uuid}}`, `{{now}}` (with an optional `strftime`
   format), `{{timestamp}}`, `{{randint:a:b}}`, `{{randfloat:a:b}}`,
   `{{choice:a|b}}`, and scoped lookups `{{path.x}}`, `{{query.x}}`,
@@ -45,6 +55,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the mock. Disable with `serve --no-cors`.
 
 ### Fixed
+
+- A client could redirect where `body_from` and `data_source.file` resolve from
+  by passing `?_config_path=...`. The route group and config path were handed to
+  the endpoint as parameter defaults, and FastAPI turns anything in an endpoint
+  signature into a request parameter, so both were exposed as query parameters
+  and appeared in the generated OpenAPI schema. The path confinement added
+  earlier was relative to that value, so it could be sidestepped. Handlers are
+  now built by a factory and capture their state lexically.
 
 - Two resources sharing a name silently served one another's data, because the
   name identifies the store. Duplicate names are now rejected, including the

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import yaml
 
 from mockyfast.app import create_app, describe_routes
 from mockyfast.config import collect_warnings, load_config_source
+from mockyfast.explain import describe_response, explain_request
 from mockyfast.resources import build_config_from_data
 
 app = typer.Typer(help="Serve API mocks from YAML")
@@ -122,6 +124,85 @@ def validate_command(
 
     echo_warnings(loaded)
     typer.echo("Configuration is valid.")
+
+
+def parse_header_options(values: list[str] | None) -> dict[str, str]:
+    headers = {}
+
+    for value in values or []:
+        name, separator, content = value.partition(":")
+        if not separator:
+            raise typer.BadParameter(f"Header must look like 'Name: value': {value!r}")
+        headers[name.strip()] = content.strip()
+
+    return headers
+
+
+@app.command("explain")
+def explain_command(
+    config: str = typer.Argument(..., help="Path to the YAML file, or a data file/folder"),
+    method: str = typer.Argument(..., help="HTTP method, e.g. GET"),
+    target: str = typer.Argument(..., help="Path to test, query string included"),
+    header: list[str] = typer.Option(
+        None,
+        "--header",
+        "-H",
+        help="Request header as 'Name: value'; repeatable",
+    ),
+    body: str = typer.Option(None, "--body", help="JSON request body"),
+) -> None:
+    """
+    Show which route answers a request, and why the others do not.
+    """
+    loaded, _ = load_or_exit(config)
+
+    parsed_body = None
+    if body is not None:
+        try:
+            parsed_body = json.loads(body)
+        except ValueError as exc:
+            typer.echo(f"--body must be valid JSON: {exc}")
+            raise typer.Exit(code=1) from exc
+
+    verdicts = explain_request(
+        loaded,
+        method=method,
+        target=target,
+        headers=parse_header_options(header),
+        body=parsed_body,
+    )
+
+    typer.echo(f"{method.upper()} {target}")
+    typer.echo("")
+
+    routes = loaded.get("routes") or []
+    winner = None
+
+    for verdict in verdicts:
+        if verdict.matched and not verdict.shadowed:
+            mark, winner = "->", verdict
+        elif verdict.shadowed:
+            mark = " ~"
+        else:
+            mark = "  "
+
+        typer.echo(
+            f"{mark} route #{verdict.index}  {verdict.method} {verdict.path}"
+            f"  -  {verdict.reason}"
+        )
+
+    typer.echo("")
+
+    if winner is None:
+        typer.echo("No route answers this request: the server would return 404.")
+        raise typer.Exit(code=1)
+
+    route = routes[winner.index - 1]
+    typer.echo(f"Answered by route #{winner.index}: {describe_response(route)}")
+
+    if winner.path_params:
+        rendered = ", ".join(f"{k}={v}" for k, v in winner.path_params.items())
+        typer.echo(f"Path parameters: {rendered}")
 
 
 @app.command("serve")

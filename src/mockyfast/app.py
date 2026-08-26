@@ -13,6 +13,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from mockyfast.config import load_config_source, load_json_file
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
+from mockyfast.faults import (
+    fault_body,
+    fault_delay_ms,
+    fault_status_code,
+    resolve_delay_ms,
+    should_fault,
+)
 from mockyfast.listing import apply_list_query
 from mockyfast.matchers import apply_matcher, is_matcher, value_matches
 from mockyfast.persistence import read_state, resolve_state_path
@@ -27,6 +34,7 @@ class ResponseOutcome:
     body: Any
     status_code: int
     headers: dict[str, str] | None = None
+    delay_ms: int | None = None
 
 
 async def build_template_context(request: Request) -> TemplateContext:
@@ -161,15 +169,59 @@ def get_response_status_code(route: dict) -> int:
 
 
 def get_response_delay_ms(route: dict) -> int:
-    response_config = route.get("response", {})
-    return int(response_config.get("delay_ms", 0))
+    return resolve_delay_ms(route.get("response", {}))
 
 
-async def apply_response_delay(route: dict) -> None:
-    delay_ms = get_response_delay_ms(route)
+async def apply_response_delay(route: dict, outcome: "ResponseOutcome") -> None:
+    delay_ms = (
+        outcome.delay_ms
+        if outcome.delay_ms is not None
+        else get_response_delay_ms(route)
+    )
 
     if delay_ms > 0:
         await asyncio.sleep(delay_ms / 1000)
+
+
+def select_route_response(route: dict, counters: dict[int, int]) -> dict:
+    """The response this call should use, advancing a `responses:` sequence."""
+    responses = route.get("responses")
+
+    if not responses:
+        return route
+
+    key = id(route)
+    position = counters.get(key, 0)
+    counters[key] = position + 1
+
+    # The final entry keeps answering once the sequence runs out.
+    chosen = responses[min(position, len(responses) - 1)]
+
+    active = dict(route)
+    active.pop("responses", None)
+    active["response"] = chosen
+
+    return active
+
+
+def build_fault_outcome(fault: dict) -> ResponseOutcome:
+    return ResponseOutcome(
+        body=fault_body(fault),
+        status_code=fault_status_code(fault),
+        delay_ms=fault_delay_ms(fault),
+    )
+
+
+def iter_route_responses(route: dict):
+    """Every response a route can produce, sequence entries included."""
+    if route.get("responses"):
+        yield from route["responses"]
+        return
+
+    response = route.get("response")
+
+    if response:
+        yield response
 
 
 def seed_mutable_store_for_route(
@@ -177,13 +229,22 @@ def seed_mutable_store_for_route(
     config_path: str,
     store: InMemoryResourceStore,
 ) -> None:
-    response_config = route.get("response", {})
+    for response_config in iter_route_responses(route):
+        seed_mutable_store_for_response(route, response_config, config_path, store)
+
+
+def seed_mutable_store_for_response(
+    route: dict,
+    response_config: dict,
+    config_path: str,
+    store: InMemoryResourceStore,
+) -> None:
     data_source = response_config.get("data_source")
 
     if not data_source or not data_source.get("mutable", False):
         return
 
-    resource_name = get_resource_name(route)
+    resource_name = data_source.get("resource_name") or route["path"]
 
     # A resource expands to several routes sharing one store, so without this
     # the same file would be read once per route.
@@ -523,6 +584,13 @@ async def build_route_outcome(
     store: InMemoryResourceStore,
 ) -> ResponseOutcome:
     response_config = route.get("response", {})
+
+    # Checked by type, not truthiness: an empty `fault: {}` still means the
+    # caller asked for a fault, and takes the defaults.
+    fault = response_config.get("fault")
+    if isinstance(fault, dict) and should_fault(fault):
+        return build_fault_outcome(fault)
+
     data_source = response_config.get("data_source")
 
     if data_source and data_source.get("mutable", False):
@@ -651,6 +719,49 @@ def add_index_route(app: FastAPI, routes: list[dict]) -> None:
     app.add_api_route("/", index, methods=["GET"], include_in_schema=False)
 
 
+def build_handler(route_group: list[dict], config_path: str):
+    """Build the endpoint for one (method, path) pair.
+
+    The route group and config path are captured lexically on purpose. Passing
+    them as parameter defaults would put them in the endpoint signature, and
+    FastAPI turns anything in a signature into a request parameter: they would
+    become query parameters a client could override, and the route dicts would
+    arrive as per-request validated copies.
+    """
+
+    async def handler(request: Request):
+        for route in route_group:
+            if not await route_matches(route, request):
+                continue
+
+            active_route = select_route_response(
+                route,
+                request.app.state.sequence_counters,
+            )
+
+            outcome = await build_route_outcome(
+                route=active_route,
+                config_path=config_path,
+                request=request,
+                store=request.app.state.store,
+            )
+
+            await apply_response_delay(active_route, outcome)
+
+            return JSONResponse(
+                content=outcome.body,
+                status_code=outcome.status_code,
+                headers=outcome.headers,
+            )
+
+        return JSONResponse(
+            content={"detail": "No matching mock route found"},
+            status_code=404,
+        )
+
+    return handler
+
+
 def create_app(
     config_path: str,
     *,
@@ -660,6 +771,7 @@ def create_app(
     config, resolved_config_path = load_config_source(config_path)
     app = FastAPI(title="MockyFast")
     app.state.store = InMemoryResourceStore()
+    app.state.sequence_counters = {}
 
     if with_cors:
         # A mock server exists to be called from a dev server on another port,
@@ -685,37 +797,11 @@ def create_app(
         grouped_routes[(method, path)].append(route)
 
     for (method, path), route_group in grouped_routes.items():
-
-        async def handler(
-            request: Request,
-            _route_group=route_group,
-            _config_path=resolved_config_path,
-        ):
-            for route in _route_group:
-                if not await route_matches(route, request):
-                    continue
-
-                outcome = await build_route_outcome(
-                    route=route,
-                    config_path=_config_path,
-                    request=request,
-                    store=request.app.state.store,
-                )
-
-                await apply_response_delay(route)
-
-                return JSONResponse(
-                    content=outcome.body,
-                    status_code=outcome.status_code,
-                    headers=outcome.headers,
-                )
-
-            return JSONResponse(
-                content={"detail": "No matching mock route found"},
-                status_code=404,
-            )
-
-        app.add_api_route(path, handler, methods=[method])
+        app.add_api_route(
+            path,
+            build_handler(route_group, resolved_config_path),
+            methods=[method],
+        )
 
     if with_index and not any(route["path"] == "/" for route in routes):
         add_index_route(app, routes)

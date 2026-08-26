@@ -1,14 +1,11 @@
 import json
-from pathlib import Path
 from typing import Any
+
+from mockyfast.paths import resolve_data_path
 
 
 def load_json_rows(config_path: str, relative_json_path: str) -> list[dict[str, Any]]:
-    base_path = Path(config_path).parent
-    json_path = (base_path / relative_json_path).resolve()
-
-    if not json_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {relative_json_path}")
+    json_path = resolve_data_path(config_path, relative_json_path, "JSON")
 
     with json_path.open("r", encoding="utf-8") as file:
         data = json.load(file)

@@ -1,17 +1,13 @@
 import csv
-from pathlib import Path
 from typing import Any
 
+from mockyfast.paths import resolve_data_path
 
 SUPPORTED_SCHEMA_TYPES = {"str", "int", "float", "bool"}
 
 
 def load_csv_rows(config_path: str, relative_csv_path: str) -> list[dict[str, Any]]:
-    base_path = Path(config_path).parent
-    csv_path = (base_path / relative_csv_path).resolve()
-
-    if not csv_path.exists():
-        raise FileNotFoundError(f"CSV file not found: {relative_csv_path}")
+    csv_path = resolve_data_path(config_path, relative_csv_path, "CSV")
 
     with csv_path.open("r", encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file)

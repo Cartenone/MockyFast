@@ -2,6 +2,13 @@ from copy import deepcopy
 from typing import Any
 
 
+def row_matches_key(row: Any, key_field: str, key_value: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+
+    return str(row.get(key_field)) == str(key_value)
+
+
 class InMemoryResourceStore:
     def __init__(self) -> None:
         self._resources: dict[str, list[dict[str, Any]]] = {}
@@ -21,7 +28,7 @@ class InMemoryResourceStore:
     ) -> dict[str, Any] | None:
         rows = self._resources.get(resource_name, [])
         for row in rows:
-            if str(row.get(key_field)) == str(key_value):
+            if row_matches_key(row, key_field, key_value):
                 return deepcopy(row)
         return None
 
@@ -47,7 +54,7 @@ class InMemoryResourceStore:
         rows = self._resources.get(resource_name, [])
 
         for index, row in enumerate(rows):
-            if str(row.get(key_field)) == str(key_value):
+            if row_matches_key(row, key_field, key_value):
                 updated = deepcopy(row)
                 updated.update(payload)
                 rows[index] = updated
@@ -64,7 +71,7 @@ class InMemoryResourceStore:
         rows = self._resources.get(resource_name, [])
 
         for index, row in enumerate(rows):
-            if str(row.get(key_field)) == str(key_value):
+            if row_matches_key(row, key_field, key_value):
                 del rows[index]
                 return True
 

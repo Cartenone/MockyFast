@@ -47,7 +47,7 @@ def validate_command(config: str = typer.Argument(..., help="Path to the YAML fi
         load_config(config)
     except Exception as exc:
         typer.echo(f"Invalid configuration: {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     typer.echo("Configuration is valid.")
 

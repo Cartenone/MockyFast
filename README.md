@@ -24,8 +24,11 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - serve mock HTTP endpoints locally
 - support inline JSON responses
 - support external JSON response files
-- support CSV-backed data-driven mocks
-- support response shaping for CSV data sources:
+- support data-driven mocks backed by:
+  - CSV files
+  - JSON files
+- support stateful mocks with in-memory CRUD (`mutable`)
+- support response shaping for data sources:
   - `wrap`
   - `not_found_status`
   - `not_found_body`
@@ -45,8 +48,8 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 ### From source
 
 ```bash
-git clone https://github.com/Cartenone/mockyfast.git
-cd mockyfast
+git clone https://github.com/Cartenone/MockyFast.git
+cd MockyFast
 pip install .
 ```
 
@@ -148,11 +151,28 @@ routes:
 
 ---
 
-## CSV-backed data-driven mocks
+## Data-driven mocks
 
-MockyFast can build responses from local CSV files, making mocks more dynamic and reusable.
+MockyFast can build responses from local CSV or JSON files, making mocks more dynamic and reusable.
 
-### `mocks/mockyfast.yaml`
+A data source is declared under `response.data_source`:
+
+| Key | Required | Description |
+|---|---|---|
+| `type` | yes | `csv` or `json` |
+| `file` | yes | Path relative to the config file |
+| `mode` | for reads | `all` returns a list, `first` returns a single object |
+| `where` | no | Filter rows by a path or query parameter |
+| `wrap` | no | Wrap the result under a key |
+| `not_found_status` | no | Status used when `mode: first` finds nothing (default `404`) |
+| `not_found_body` | no | Body used when `mode: first` finds nothing |
+| `coerce_types` | no | CSV only — infer primitive types |
+| `schema` | no | CSV only — explicit type mapping |
+| `mutable` | no | Serve the file from a writable in-memory store |
+| `key_field` | with `mutable` | Primary key of the resource |
+| `resource_name` | with `mutable` | Store identity shared across routes |
+
+### CSV data source
 
 ```yaml
 routes:
@@ -217,6 +237,52 @@ curl http://127.0.0.1:8000/users/999
 }
 ```
 
+### JSON data source
+
+A JSON data source works the same way, but the file must contain a **root list of objects** and the filter key is `field` instead of `column`.
+
+```yaml
+routes:
+  - method: GET
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: first
+        where:
+          field: id
+          equals_path_param: user_id
+```
+
+### `mocks/data/users.json`
+
+```json
+[
+  { "id": 1, "name": "Mario", "role": "admin" },
+  { "id": 2, "name": "Luigi", "role": "user" },
+  { "id": 3, "name": "Anna", "role": "user" }
+]
+```
+
+JSON values keep their original types, so `coerce_types` and `schema` are not needed (and not supported) for JSON sources.
+
+### Filtering by query param
+
+`where` can read a query parameter instead of a path parameter:
+
+```yaml
+where:
+  field: role
+  equals_query_param: role
+```
+
+```bash
+curl "http://127.0.0.1:8000/users?role=admin"
+```
+
+Exactly one of `equals_path_param` or `equals_query_param` must be set.
+
 ### Type coercion
 
 You can automatically coerce CSV values into Python/JSON primitive types.
@@ -278,6 +344,121 @@ When `schema` is present, it takes precedence over `coerce_types`.
 
 ---
 
+## Stateful mocks
+
+Set `mutable: true` to turn a data source into a writable in-memory resource. The file is read **once at startup** to seed the store, and every request after that reads and writes the in-memory copy.
+
+**The data file on disk is never modified.** Restarting the server resets the resource to its seeded state.
+
+Two keys are required alongside `mutable`:
+
+- `key_field` — the primary key of the resource
+- `resource_name` — the store identity. Every route that should share the same data must use the same `resource_name`, because `/users` and `/users/{user_id}` are different paths and would otherwise be separate stores.
+
+### Full CRUD example
+
+```yaml
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+        wrap: items
+
+  - method: POST
+    path: /users
+    response:
+      status_code: 201
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+
+  - method: GET
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: first
+        mutable: true
+        key_field: id
+        resource_name: users
+        where:
+          field: id
+          equals_path_param: user_id
+
+  - method: PUT
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+        where:
+          field: id
+          equals_path_param: user_id
+
+  - method: DELETE
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+        where:
+          field: id
+          equals_path_param: user_id
+```
+
+### Example session
+
+```bash
+curl -X POST http://127.0.0.1:8000/users \
+  -H 'content-type: application/json' \
+  -d '{"id": 4, "name": "Giulia"}'
+
+curl http://127.0.0.1:8000/users/4
+
+curl -X PUT http://127.0.0.1:8000/users/4 \
+  -H 'content-type: application/json' \
+  -d '{"name": "Giulia Updated"}'
+
+curl -X DELETE http://127.0.0.1:8000/users/4
+```
+
+### What each method does
+
+| Method | `mode` | `where` | Behaviour |
+|---|---|---|---|
+| `GET` | required | optional | Reads from the store, honouring `wrap` and `not_found_*` |
+| `POST` | ignored | not used | Creates a resource from the request body |
+| `PUT` | ignored | required | Merges the request body into the matched resource |
+| `PATCH` | ignored | required | Same as `PUT` |
+| `DELETE` | ignored | required | Removes the matched resource, returns `{"deleted": true}` |
+
+### Write rules
+
+- The request body must be a JSON **object** — anything else returns `400`.
+- `POST` requires `key_field` in the body (`400` if missing) and rejects an existing key with `409`.
+- `PUT` and `PATCH` merge the body into the stored resource; keys not present in the body are preserved.
+- `PUT` and `PATCH` cannot change `key_field` — attempting to do so returns `400`.
+- When `PUT`, `PATCH`, or `DELETE` match nothing, the configured `not_found_status` / `not_found_body` are used (default `404`).
+
+---
+
 ## Path params
 
 You can use path parameters in the route path and reference them in the response body.
@@ -308,11 +489,15 @@ Response:
 }
 ```
 
+Substitution applies to string **values**, not to object keys.
+
 ---
 
 ## Request matching
 
 `mockyfast` can return different responses for the same path depending on the request.
+
+Routes are evaluated in declaration order, and the first one whose matchers all pass wins. Put the most specific route first.
 
 ### Match by query params
 
@@ -383,6 +568,8 @@ routes:
         error: invalid_credentials
 ```
 
+Matching is partial for `query` and `headers` (extra values in the request are ignored) and for object keys in `json`. Lists inside `json` must match exactly, including length.
+
 ---
 
 ## Delayed responses
@@ -400,11 +587,22 @@ routes:
         ok: true
 ```
 
+The delay applies to every response the route produces, including not-found and CRUD responses.
+
 This is useful when you want to simulate:
 
 - slow services
 - network latency
 - client-side timeouts
+
+---
+
+## Behaviour notes
+
+- **Route order matters.** `/users/me` declared after `/users/{user_id}` is never reached. Declare static paths first.
+- **Non-mutable data files are re-read on every request.** Editing a CSV or JSON data source is picked up without restarting the server. `mutable` sources are the exception: they are read once at startup.
+- **Referenced files must stay inside the config directory.** `body_from` and `data_source.file` cannot escape the folder containing the YAML file.
+- **State is per-process.** The in-memory store is not shared between server restarts or between multiple processes.
 
 ---
 
@@ -429,7 +627,8 @@ That makes it easier to:
 mocks/
 ├─ mockyfast.yaml
 ├─ data/
-│  └─ users.csv
+│  ├─ users.csv
+│  └─ users.json
 └─ responses/
    └─ users.json
 ```
@@ -454,20 +653,36 @@ This helps catch issues like:
 
 - missing `routes`
 - invalid route structure
+- unknown HTTP methods, or paths not starting with `/`
 - missing JSON files
 - missing CSV files
+- files referenced outside the configuration directory
+- invalid `status_code`
 - invalid `delay_ms`
 - invalid request matching config
 - invalid CSV schema configuration
+- incomplete `mutable` configuration (`key_field`, `resource_name`, `where`)
 
 ---
 
-## Tests
+## Development
 
-Run the test suite with:
+Run the test suite:
 
 ```bash
 pytest
+```
+
+With coverage:
+
+```bash
+pytest --cov=mockyfast --cov-report=term-missing
+```
+
+Lint:
+
+```bash
+ruff check .
 ```
 
 ---
@@ -477,12 +692,11 @@ pytest
 Planned improvements:
 
 - better error messages and validation feedback
-- JSON-backed data-driven mocks
 - HTTP client / probe mode
 - capture real API responses into reusable mock files
 - more advanced matching rules
-- stateful mock scenarios
 - extended fault injection beyond `delay_ms`
+- persisting mutable state across restarts
 
 Future exploration:
 

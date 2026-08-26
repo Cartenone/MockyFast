@@ -1,6 +1,6 @@
 [project]
 name = "mockyfast"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI tool to serve API mocks from YAML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-cov",
   "httpx",
+  "ruff",
 ]
 
 [project.scripts]
@@ -27,3 +29,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

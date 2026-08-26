@@ -1,14 +1,23 @@
-from collections import defaultdict
 import asyncio
+from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from mockyfast.config import load_config, load_json_file
-from mockyfast.state_store import InMemoryResourceStore
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
+from mockyfast.state_store import InMemoryResourceStore
+
+
+@dataclass
+class ResponseOutcome:
+    """What a matched route decided to answer, before it becomes a response."""
+
+    body: Any
+    status_code: int
 
 
 def render_template(value, path_params: dict):
@@ -67,7 +76,7 @@ def json_matches(expected, actual) -> bool:
         if len(expected) != len(actual):
             return False
 
-        for expected_item, actual_item in zip(expected, actual):
+        for expected_item, actual_item in zip(expected, actual, strict=True):
             if not json_matches(expected_item, actual_item):
                 return False
 
@@ -114,6 +123,23 @@ def get_resource_name(route: dict) -> str:
     return route["path"]
 
 
+def get_response_status_code(route: dict) -> int:
+    response_config = route.get("response", {})
+    return response_config.get("status_code", 200)
+
+
+def get_response_delay_ms(route: dict) -> int:
+    response_config = route.get("response", {})
+    return int(response_config.get("delay_ms", 0))
+
+
+async def apply_response_delay(route: dict) -> None:
+    delay_ms = get_response_delay_ms(route)
+
+    if delay_ms > 0:
+        await asyncio.sleep(delay_ms / 1000)
+
+
 def seed_mutable_store_for_route(
     route: dict,
     config_path: str,
@@ -151,6 +177,10 @@ def resolve_where_expected_value(
     return None
 
 
+def get_where_field(where: dict[str, Any]) -> str | None:
+    return where.get("column") or where.get("field")
+
+
 def query_mutable_data_source(
     route: dict,
     store: InMemoryResourceStore,
@@ -169,7 +199,7 @@ def query_mutable_data_source(
     if where is None:
         filtered_rows = rows
     else:
-        compare_key = where.get("column") or where.get("field")
+        compare_key = get_where_field(where)
         expected_value = resolve_where_expected_value(where, path_params, query_params)
 
         if expected_value is None:
@@ -188,13 +218,20 @@ def query_mutable_data_source(
     raise ValueError(f"Unsupported mutable data source mode: {mode}")
 
 
+def build_not_found_outcome(data_source: dict) -> ResponseOutcome:
+    return ResponseOutcome(
+        body=data_source.get("not_found_body", {"detail": "Resource not found"}),
+        status_code=data_source.get("not_found_status", 404),
+    )
+
+
 def build_data_source_response(
     route: dict,
     config_path: str,
     path_params: dict[str, Any],
     query_params: dict[str, Any],
     store: InMemoryResourceStore,
-) -> tuple[bool, Any, int | None, Any]:
+) -> ResponseOutcome:
     response_config = route.get("response", {})
     data_source = response_config["data_source"]
 
@@ -228,18 +265,14 @@ def build_data_source_response(
     else:
         raise ValueError(f"Unsupported data source type: {data_source['type']}")
 
-    if data_source["mode"] == "first" and result is None:
-        not_found_status = data_source.get("not_found_status", 404)
-        not_found_body = data_source.get(
-            "not_found_body", {"detail": "Resource not found"}
-        )
-        return False, None, not_found_status, not_found_body
+    if data_source.get("mode") == "first" and result is None:
+        return build_not_found_outcome(data_source)
 
     wrap = data_source.get("wrap")
     if wrap is not None:
         result = {wrap: result}
 
-    return True, result, None, None
+    return ResponseOutcome(body=result, status_code=get_response_status_code(route))
 
 
 def build_response_body(
@@ -248,7 +281,7 @@ def build_response_body(
     path_params: dict[str, Any],
     query_params: dict[str, Any],
     store: InMemoryResourceStore,
-) -> tuple[bool, Any, int | None, Any]:
+) -> ResponseOutcome:
     response_config = route.get("response", {})
 
     if "data_source" in response_config:
@@ -265,12 +298,185 @@ def build_response_body(
     else:
         body = response_config.get("body", {})
 
-    return True, render_template(body, path_params), None, None
+    return ResponseOutcome(
+        body=render_template(body, path_params),
+        status_code=get_response_status_code(route),
+    )
 
 
-def get_response_delay_ms(route: dict) -> int:
+async def read_json_object(request: Request) -> tuple[Any, ResponseOutcome | None]:
+    """Parse the request body, returning an error outcome instead of raising."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return None, ResponseOutcome(
+            body={"detail": "Request body must be valid JSON."},
+            status_code=400,
+        )
+
+    if not isinstance(payload, dict):
+        return None, ResponseOutcome(
+            body={"detail": "Request body must be a JSON object."},
+            status_code=400,
+        )
+
+    return payload, None
+
+
+def resolve_mutable_match(
+    data_source: dict,
+    request: Request,
+) -> tuple[str | None, Any]:
+    """Field and value identifying the single resource a write targets."""
+    where = data_source.get("where", {})
+
+    match_field = get_where_field(where)
+    match_value = resolve_where_expected_value(
+        where,
+        request.path_params,
+        dict(request.query_params),
+    )
+
+    return match_field, match_value
+
+
+async def handle_mutable_create(
+    route: dict,
+    data_source: dict,
+    request: Request,
+    store: InMemoryResourceStore,
+) -> ResponseOutcome:
+    payload, error = await read_json_object(request)
+    if error is not None:
+        return error
+
+    key_field = data_source["key_field"]
+
+    if key_field not in payload:
+        return ResponseOutcome(
+            body={"detail": f"Request body must contain the key field '{key_field}'."},
+            status_code=400,
+        )
+
+    resource_name = get_resource_name(route)
+    key_value = payload[key_field]
+
+    if store.get_by_key(resource_name, key_field, key_value) is not None:
+        return ResponseOutcome(
+            body={
+                "detail": f"A resource with {key_field}={key_value} already exists."
+            },
+            status_code=409,
+        )
+
+    created = store.create(resource_name, payload)
+
+    return ResponseOutcome(body=created, status_code=get_response_status_code(route))
+
+
+async def handle_mutable_update(
+    route: dict,
+    data_source: dict,
+    request: Request,
+    store: InMemoryResourceStore,
+) -> ResponseOutcome:
+    payload, error = await read_json_object(request)
+    if error is not None:
+        return error
+
+    resource_name = get_resource_name(route)
+    key_field = data_source["key_field"]
+    match_field, match_value = resolve_mutable_match(data_source, request)
+
+    if match_field is None or match_value is None:
+        return build_not_found_outcome(data_source)
+
+    existing = store.get_by_key(resource_name, match_field, match_value)
+    if existing is None:
+        return build_not_found_outcome(data_source)
+
+    if key_field in payload and str(payload[key_field]) != str(existing.get(key_field)):
+        return ResponseOutcome(
+            body={"detail": f"The key field '{key_field}' cannot be changed."},
+            status_code=400,
+        )
+
+    updated = store.update(
+        resource_name=resource_name,
+        key_field=match_field,
+        key_value=match_value,
+        payload=payload,
+    )
+
+    if updated is None:
+        return build_not_found_outcome(data_source)
+
+    return ResponseOutcome(body=updated, status_code=get_response_status_code(route))
+
+
+def handle_mutable_delete(
+    route: dict,
+    data_source: dict,
+    request: Request,
+    store: InMemoryResourceStore,
+) -> ResponseOutcome:
+    resource_name = get_resource_name(route)
+    match_field, match_value = resolve_mutable_match(data_source, request)
+
+    if match_field is None or match_value is None:
+        return build_not_found_outcome(data_source)
+
+    deleted = store.delete(
+        resource_name=resource_name,
+        key_field=match_field,
+        key_value=match_value,
+    )
+
+    if not deleted:
+        return build_not_found_outcome(data_source)
+
+    return ResponseOutcome(
+        body={"deleted": True},
+        status_code=get_response_status_code(route),
+    )
+
+
+async def build_route_outcome(
+    route: dict,
+    config_path: str,
+    request: Request,
+    store: InMemoryResourceStore,
+) -> ResponseOutcome:
     response_config = route.get("response", {})
-    return int(response_config.get("delay_ms", 0))
+    data_source = response_config.get("data_source")
+
+    if data_source and data_source.get("mutable", False):
+        method = request.method.upper()
+
+        if method == "POST":
+            return await handle_mutable_create(route, data_source, request, store)
+
+        if method in {"PUT", "PATCH"}:
+            return await handle_mutable_update(route, data_source, request, store)
+
+        if method == "DELETE":
+            return handle_mutable_delete(route, data_source, request, store)
+
+        if method != "GET":
+            return ResponseOutcome(
+                body={
+                    "detail": f"Method {method} is not supported on a mutable data source."
+                },
+                status_code=405,
+            )
+
+    return build_response_body(
+        route=route,
+        config_path=config_path,
+        path_params=request.path_params,
+        query_params=dict(request.query_params),
+        store=store,
+    )
 
 
 def create_app(config_path: str) -> FastAPI:
@@ -297,159 +503,22 @@ def create_app(config_path: str) -> FastAPI:
             _config_path=config_path,
         ):
             for route in _route_group:
-                if await route_matches(route, request):
-                    store = request.app.state.store
-                    response_config = route.get("response", {})
-                    status_code = response_config.get("status_code", 200)
+                if not await route_matches(route, request):
+                    continue
 
-                    data_source = response_config.get("data_source")
-                    if data_source and data_source.get("mutable", False):
-                        resource_name = get_resource_name(route)
-                        key_field = data_source["key_field"]
+                outcome = await build_route_outcome(
+                    route=route,
+                    config_path=_config_path,
+                    request=request,
+                    store=request.app.state.store,
+                )
 
-                        if request.method == "GET":
-                            where = data_source.get("where")
-                            mode = data_source["mode"]
+                await apply_response_delay(route)
 
-                            if mode == "all":
-                                result = store.list(resource_name)
-
-                                if where is not None:
-                                    compare_key = where.get("column") or where.get("field")
-                                    expected_value = resolve_where_expected_value(
-                                        where,
-                                        request.path_params,
-                                        dict(request.query_params),
-                                    )
-
-                                    if expected_value is None:
-                                        result = []
-                                    else:
-                                        result = [
-                                            row
-                                            for row in result
-                                            if str(row.get(compare_key)) == str(expected_value)
-                                        ]
-
-                            elif mode == "first":
-                                where = data_source.get("where", {})
-                                compare_key = where.get("column") or where.get("field")
-                                expected_value = resolve_where_expected_value(
-                                    where,
-                                    request.path_params,
-                                    dict(request.query_params),
-                                )
-
-                                rows = store.list(resource_name)
-
-                                if expected_value is None:
-                                    result = None
-                                else:
-                                    result = next(
-                                        (
-                                            row
-                                            for row in rows
-                                            if str(row.get(compare_key)) == str(expected_value)
-                                        ),
-                                        None,
-                                    )
-                            else:
-                                raise ValueError(f"Unsupported mutable mode: {mode}")
-
-                            if data_source["mode"] == "first" and result is None:
-                                not_found_status = data_source.get("not_found_status", 404)
-                                not_found_body = data_source.get(
-                                    "not_found_body", {"detail": "Resource not found"}
-                                )
-                                return JSONResponse(
-                                    content=not_found_body,
-                                    status_code=not_found_status,
-                                )
-
-                            wrap = data_source.get("wrap")
-                            if wrap is not None:
-                                result = {wrap: result}
-
-                            return JSONResponse(content=result, status_code=status_code)
-
-                        if request.method == "POST":
-                            payload = await request.json()
-                            created = store.create(resource_name, payload)
-                            return JSONResponse(content=created, status_code=status_code)
-
-                        if request.method == "PUT":
-                            payload = await request.json()
-
-                            where = data_source.get("where", {})
-                            key_value = resolve_where_expected_value(
-                                where,
-                                request.path_params,
-                                dict(request.query_params),
-                            )
-
-                            updated = store.update(
-                                resource_name=resource_name,
-                                key_field=key_field,
-                                key_value=key_value,
-                                payload=payload,
-                            )
-
-                            if updated is None:
-                                return JSONResponse(
-                                    content={"detail": "Resource not found"},
-                                    status_code=404,
-                                )
-
-                            return JSONResponse(content=updated, status_code=status_code)
-
-                        if request.method == "DELETE":
-                            where = data_source.get("where", {})
-                            key_value = resolve_where_expected_value(
-                                where,
-                                request.path_params,
-                                dict(request.query_params),
-                            )
-
-                            deleted = store.delete(
-                                resource_name=resource_name,
-                                key_field=key_field,
-                                key_value=key_value,
-                            )
-
-                            if not deleted:
-                                return JSONResponse(
-                                    content={"detail": "Resource not found"},
-                                    status_code=404,
-                                )
-
-                            return JSONResponse(
-                                content={"deleted": True},
-                                status_code=status_code,
-                            )
-
-                    found, body, not_found_status, not_found_body = build_response_body(
-                        route=route,
-                        config_path=_config_path,
-                        path_params=request.path_params,
-                        query_params=dict(request.query_params),
-                        store=store,
-                    )
-
-                    if not found:
-                        return JSONResponse(
-                            content=not_found_body,
-                            status_code=not_found_status,
-                        )
-
-                    delay_ms = get_response_delay_ms(route)
-
-                    if delay_ms > 0:
-                        await asyncio.sleep(delay_ms / 1000)
-
-                    return JSONResponse(
-                        content=body,
-                        status_code=status_code,
-                    )
+                return JSONResponse(
+                    content=outcome.body,
+                    status_code=outcome.status_code,
+                )
 
             return JSONResponse(
                 content={"detail": "No matching mock route found"},

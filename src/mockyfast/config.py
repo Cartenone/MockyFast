@@ -1,8 +1,25 @@
-from pathlib import Path
 import json
-from mockyfast.datasources.csv_source import SUPPORTED_SCHEMA_TYPES
-from mockyfast.datasources.csv_source import SUPPORTED_SCHEMA_TYPES
+from pathlib import Path
+
 import yaml
+
+from mockyfast.datasources.csv_source import SUPPORTED_SCHEMA_TYPES
+from mockyfast.paths import resolve_data_path
+
+HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+# Methods a mutable data source knows how to serve.
+MUTABLE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+# Methods that write to the in-memory store.
+MUTABLE_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# Write methods addressing one existing resource, so they need a 'where'.
+MUTABLE_TARGETED_METHODS = {"PUT", "PATCH", "DELETE"}
+
+
+def is_integer(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def load_config(path: str) -> dict:
@@ -45,6 +62,21 @@ def validate_routes(config: dict, config_path: str) -> None:
         if "response" not in route:
             raise ValueError(f"Route #{index} is missing 'response'.")
 
+        method = route["method"]
+        if not isinstance(method, str):
+            raise ValueError(f"'method' in route #{index} must be a string.")
+
+        method = method.upper()
+        if method not in HTTP_METHODS:
+            allowed = ", ".join(sorted(HTTP_METHODS))
+            raise ValueError(f"'method' in route #{index} must be one of: {allowed}.")
+
+        path = route["path"]
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise ValueError(
+                f"'path' in route #{index} must be a string starting with '/'."
+            )
+
         request = route.get("request")
         if request is not None and not isinstance(request, dict):
             raise ValueError(f"'request' in route #{index} must be an object.")
@@ -63,7 +95,9 @@ def validate_routes(config: dict, config_path: str) -> None:
                 )
 
             expected_json = request.get("json")
-            if expected_json is not None and not isinstance(expected_json, (dict, list)):
+            if expected_json is not None and not isinstance(
+                expected_json, (dict, list)
+            ):
                 raise ValueError(
                     f"'request.json' in route #{index} must be an object or a list."
                 )
@@ -88,11 +122,27 @@ def validate_routes(config: dict, config_path: str) -> None:
             load_json_file(config_path, response["body_from"])
 
         if has_data_source:
-            validate_data_source(response["data_source"], config_path, index)
+            validate_data_source(response["data_source"], config_path, index, method)
 
-        delay_ms = response.get("delay_ms")
-        if delay_ms is not None:
-            if not isinstance(delay_ms, int):
+        # Checked by key presence: an explicit 'status_code:' with no value is a
+        # mistake, not an omission, and would reach JSONResponse as None.
+        if "status_code" in response:
+            status_code = response["status_code"]
+
+            if not is_integer(status_code):
+                raise ValueError(
+                    f"'response.status_code' in route #{index} must be an integer."
+                )
+
+            if status_code < 100 or status_code > 599:
+                raise ValueError(
+                    f"'response.status_code' in route #{index} must be a valid HTTP status code."
+                )
+
+        if "delay_ms" in response:
+            delay_ms = response["delay_ms"]
+
+            if not is_integer(delay_ms):
                 raise ValueError(
                     f"'response.delay_ms' in route #{index} must be an integer."
                 )
@@ -103,7 +153,12 @@ def validate_routes(config: dict, config_path: str) -> None:
                 )
 
 
-def validate_data_source(data_source: dict, config_path: str, index: int) -> None:
+def validate_data_source(
+    data_source: dict,
+    config_path: str,
+    index: int,
+    method: str,
+) -> None:
     if not isinstance(data_source, dict):
         raise ValueError(f"'response.data_source' in route #{index} must be an object.")
 
@@ -124,8 +179,17 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
     else:
         load_json_file(config_path, file_path)
 
+    mutable = data_source.get("mutable")
+    if mutable is not None and not isinstance(mutable, bool):
+        raise ValueError(
+            f"'response.data_source.mutable' in route #{index} must be a boolean."
+        )
+
+    # 'mode' shapes a read response, so it carries no meaning on a write route.
     mode = data_source.get("mode")
-    if mode not in {"first", "all"}:
+    mode_is_optional = bool(mutable) and method in MUTABLE_WRITE_METHODS
+
+    if not (mode is None and mode_is_optional) and mode not in {"first", "all"}:
         raise ValueError(
             f"'response.data_source.mode' in route #{index} must be 'first' or 'all'."
         )
@@ -158,16 +222,18 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
             f"'response.data_source.wrap' in route #{index} must be a string."
         )
 
-    not_found_status = data_source.get("not_found_status")
-    if not_found_status is not None:
-        if not isinstance(not_found_status, int):
+    if "not_found_status" in data_source:
+        not_found_status = data_source["not_found_status"]
+
+        if not is_integer(not_found_status):
             raise ValueError(
                 f"'response.data_source.not_found_status' in route #{index} must be an integer."
             )
 
         if not_found_status < 100 or not_found_status > 599:
             raise ValueError(
-                f"'response.data_source.not_found_status' in route #{index} must be a valid HTTP status code."
+                f"'response.data_source.not_found_status' in route #{index} "
+                f"must be a valid HTTP status code."
             )
 
     not_found_body = data_source.get("not_found_body")
@@ -175,7 +241,8 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
         not_found_body, (dict, list, str, int, float, bool)
     ):
         raise ValueError(
-            f"'response.data_source.not_found_body' in route #{index} must be a valid JSON-compatible value."
+            f"'response.data_source.not_found_body' in route #{index} "
+            f"must be a valid JSON-compatible value."
         )
 
     coerce_types = data_source.get("coerce_types")
@@ -188,7 +255,8 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
     if schema is not None:
         if source_type != "csv":
             raise ValueError(
-                f"'response.data_source.schema' in route #{index} is only supported for 'csv' data sources."
+                f"'response.data_source.schema' in route #{index} "
+                f"is only supported for 'csv' data sources."
             )
 
         if not isinstance(schema, dict):
@@ -208,11 +276,6 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
                     f"'response.data_source.schema.{field_name}' in route #{index} "
                     f"must be one of: {allowed}."
                 )
-    mutable = data_source.get("mutable")
-    if mutable is not None and not isinstance(mutable, bool):
-        raise ValueError(
-            f"'response.data_source.mutable' in route #{index} must be a boolean."
-        )
 
     key_field = data_source.get("key_field")
     if key_field is not None and not isinstance(key_field, str):
@@ -229,23 +292,37 @@ def validate_data_source(data_source: dict, config_path: str, index: int) -> Non
     if mutable:
         if not key_field:
             raise ValueError(
-                f"'response.data_source.key_field' in route #{index} is required when mutable is true."
+                f"'response.data_source.key_field' in route #{index} "
+                f"is required when mutable is true."
             )
 
-def load_json_file(config_path: str, relative_json_path: str):
-    base_path = Path(config_path).parent
-    json_path = (base_path / relative_json_path).resolve()
+        # Without an explicit name the store falls back to the route path, so
+        # /users and /users/{user_id} would silently hold separate copies.
+        if not resource_name:
+            raise ValueError(
+                f"'response.data_source.resource_name' in route #{index} "
+                f"is required when mutable is true."
+            )
 
-    if not json_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {relative_json_path}")
+        if method not in MUTABLE_METHODS:
+            allowed = ", ".join(sorted(MUTABLE_METHODS))
+            raise ValueError(
+                f"'method' in route #{index} must be one of: {allowed} when mutable is true."
+            )
+
+        if method in MUTABLE_TARGETED_METHODS and where is None:
+            raise ValueError(
+                f"'response.data_source.where' in route #{index} is required "
+                f"for {method} on a mutable data source."
+            )
+
+
+def load_json_file(config_path: str, relative_json_path: str):
+    json_path = resolve_data_path(config_path, relative_json_path, "JSON")
 
     with json_path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
 def load_csv_file_reference(config_path: str, relative_csv_path: str) -> None:
-    base_path = Path(config_path).parent
-    csv_path = (base_path / relative_csv_path).resolve()
-
-    if not csv_path.exists():
-        raise FileNotFoundError(f"CSV file not found: {relative_csv_path}")
+    resolve_data_path(config_path, relative_csv_path, "CSV")

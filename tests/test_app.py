@@ -1,5 +1,7 @@
-from fastapi.testclient import TestClient
 import time
+
+from fastapi.testclient import TestClient
+
 from mockyfast.app import create_app
 
 
@@ -1137,3 +1139,382 @@ routes:
 
     missing_response = client.get("/users/2")
     assert missing_response.status_code == 404
+
+MUTABLE_USERS_CONFIG = """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+
+  - method: POST
+    path: /users
+    response:
+      status_code: 201
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+
+  - method: GET
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: first
+        mutable: true
+        key_field: id
+        resource_name: users
+        not_found_status: 404
+        not_found_body:
+          error: user_not_found
+        where:
+          field: id
+          equals_path_param: user_id
+
+  - method: PUT
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+        not_found_status: 404
+        not_found_body:
+          error: user_not_found
+        where:
+          field: id
+          equals_path_param: user_id
+
+  - method: PATCH
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+        where:
+          field: id
+          equals_path_param: user_id
+
+  - method: DELETE
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+        not_found_status: 410
+        not_found_body:
+          error: already_gone
+        where:
+          field: id
+          equals_path_param: user_id
+"""
+
+
+def build_mutable_client(tmp_path, config_body=MUTABLE_USERS_CONFIG):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    json_file = data_dir / "users.json"
+    json_file.write_text(
+        '[{"id": 1, "name": "Mario", "role": "admin"}]',
+        encoding="utf-8",
+    )
+
+    config_file = tmp_path / "mockyfast.yaml"
+    config_file.write_text(config_body, encoding="utf-8")
+
+    return TestClient(create_app(str(config_file)), raise_server_exceptions=False)
+
+
+def test_mutable_routes_share_one_store_across_paths(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    create_response = client.post("/users", json={"id": 2, "name": "Luigi"})
+    assert create_response.status_code == 201
+
+    detail_response = client.get("/users/2")
+
+    assert detail_response.status_code == 200
+    assert detail_response.json() == {"id": 2, "name": "Luigi"}
+
+
+def test_mutable_route_applies_delay_ms(tmp_path):
+    config_body = """
+routes:
+  - method: GET
+    path: /users
+    response:
+      delay_ms: 300
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+"""
+
+    client = build_mutable_client(tmp_path, config_body)
+
+    started_at = time.perf_counter()
+    response = client.get("/users")
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+
+    assert response.status_code == 200
+    assert elapsed_ms >= 250
+
+
+def test_data_source_not_found_response_applies_delay_ms(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    csv_file = data_dir / "users.csv"
+    csv_file.write_text("id,name\n1,Mario\n", encoding="utf-8")
+
+    config_file = tmp_path / "mockyfast.yaml"
+    config_file.write_text(
+        """
+routes:
+  - method: GET
+    path: /users/{user_id}
+    response:
+      delay_ms: 300
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mode: first
+        where:
+          column: id
+          equals_path_param: user_id
+""",
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_app(str(config_file)))
+
+    started_at = time.perf_counter()
+    response = client.get("/users/999")
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+
+    assert response.status_code == 404
+    assert elapsed_ms >= 250
+
+
+def test_mutable_create_rejects_a_malformed_json_body(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.post(
+        "/users",
+        content=b"{not json",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be valid JSON."}
+
+
+def test_mutable_create_rejects_a_non_object_body(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.post("/users", json=[1, 2, 3])
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be a JSON object."}
+    assert client.get("/users").json() == [
+        {"id": 1, "name": "Mario", "role": "admin"}
+    ]
+
+
+def test_mutable_create_requires_the_key_field(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.post("/users", json={"name": "Senza id"})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Request body must contain the key field 'id'."
+    }
+
+
+def test_mutable_create_rejects_a_duplicate_key(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.post("/users", json={"id": 1, "name": "Doppione"})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "A resource with id=1 already exists."}
+
+
+def test_mutable_patch_updates_a_resource(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.patch("/users/1", json={"name": "Mario Updated"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 1,
+        "name": "Mario Updated",
+        "role": "admin",
+    }
+
+
+def test_mutable_update_rejects_a_changed_key_field(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.put("/users/1", json={"id": 42, "name": "Rinominato"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "The key field 'id' cannot be changed."}
+    assert client.get("/users/1").status_code == 200
+
+
+def test_mutable_update_accepts_the_unchanged_key_field(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.put("/users/1", json={"id": 1, "name": "Mario Updated"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Mario Updated"
+
+
+def test_mutable_update_uses_the_configured_not_found_response(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.put("/users/999", json={"name": "Fantasma"})
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "user_not_found"}
+
+
+def test_mutable_delete_uses_the_configured_not_found_response(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    response = client.delete("/users/999")
+
+    assert response.status_code == 410
+    assert response.json() == {"error": "already_gone"}
+
+
+def test_mutable_delete_removes_the_resource(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    assert client.delete("/users/1").status_code == 200
+    assert client.get("/users").json() == []
+    assert client.get("/users/1").status_code == 404
+
+
+def test_mutable_csv_data_source_supports_crud(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    csv_file = data_dir / "users.csv"
+    csv_file.write_text("id,name\n1,Mario\n", encoding="utf-8")
+
+    config_file = tmp_path / "mockyfast.yaml"
+    config_file.write_text(
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+
+  - method: POST
+    path: /users
+    response:
+      status_code: 201
+      data_source:
+        type: csv
+        file: ./data/users.csv
+        mutable: true
+        key_field: id
+        resource_name: users
+""",
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_app(str(config_file)))
+
+    create_response = client.post("/users", json={"id": "2", "name": "Luigi"})
+    assert create_response.status_code == 201
+
+    assert client.get("/users").json() == [
+        {"id": "1", "name": "Mario"},
+        {"id": "2", "name": "Luigi"},
+    ]
+
+
+def test_mutable_route_can_match_on_a_query_param(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    json_file = data_dir / "users.json"
+    json_file.write_text(
+        '[{"id": 1, "role": "admin"}, {"id": 2, "role": "user"}]',
+        encoding="utf-8",
+    )
+
+    config_file = tmp_path / "mockyfast.yaml"
+    config_file.write_text(
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+        where:
+          field: role
+          equals_query_param: role
+""",
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_app(str(config_file)))
+
+    response = client.get("/users", params={"role": "admin"})
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": 1, "role": "admin"}]
+
+
+def test_mutable_seed_is_not_affected_by_later_file_changes(tmp_path):
+    client = build_mutable_client(tmp_path)
+
+    (tmp_path / "data" / "users.json").write_text(
+        '[{"id": 7, "name": "Sostituito"}]',
+        encoding="utf-8",
+    )
+
+    response = client.get("/users")
+
+    assert response.json() == [{"id": 1, "name": "Mario", "role": "admin"}]

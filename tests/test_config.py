@@ -180,9 +180,11 @@ routes:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError,
-    match="can only define one of 'body', 'body_from', or 'data_source'"
-    ,):load_config(str(config_file))
+    with pytest.raises(
+        ValueError,
+        match="can only define one of 'body', 'body_from', or 'data_source'",
+    ):
+        load_config(str(config_file))
 
 
 def test_load_config_raises_if_request_query_is_not_an_object(tmp_path):
@@ -470,7 +472,10 @@ routes:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="'response.data_source.wrap' in route #1 must be a string"):
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.wrap' in route #1 must be a string",
+    ):
         load_config(str(config_file))
 
 
@@ -722,3 +727,379 @@ routes:
         match="'response.data_source.schema' in route #1 is only supported for 'csv' data sources",
     ):
         load_config(str(config_file))
+
+
+def write_config(tmp_path, body):
+    config_file = tmp_path / "mockyfast.yaml"
+    config_file.write_text(body, encoding="utf-8")
+    return str(config_file)
+
+
+def write_json_data(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    json_file = data_dir / "users.json"
+    json_file.write_text('[{"id": 1, "name": "Mario"}]', encoding="utf-8")
+
+    return json_file
+
+
+MUTABLE_DATA_SOURCE = """
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+"""
+
+
+def test_load_config_raises_if_status_code_is_not_an_integer(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      status_code: "abc"
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.status_code' in route #1 must be an integer",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_status_code_is_empty(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      status_code:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.status_code' in route #1 must be an integer",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_status_code_is_out_of_range(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      status_code: 999
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.status_code' in route #1 must be a valid HTTP status code",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_accepts_a_valid_status_code(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      status_code: 204
+      body:
+        ok: true
+""",
+    )
+
+    config = load_config(config_path)
+
+    assert config["routes"][0]["response"]["status_code"] == 204
+
+
+def test_load_config_raises_if_delay_ms_is_empty(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /x
+    response:
+      delay_ms:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.delay_ms' in route #1 must be an integer",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_method_is_not_a_known_http_method(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: FETCH
+    path: /x
+    response:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(ValueError, match="'method' in route #1 must be one of"):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_path_does_not_start_with_a_slash(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: users
+    response:
+      body:
+        ok: true
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'path' in route #1 must be a string starting with '/'",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_json_file_escapes_the_config_directory(tmp_path):
+    outside_file = tmp_path.parent / "outside.json"
+    outside_file.write_text('[{"id": 1}]', encoding="utf-8")
+
+    config_dir = tmp_path / "mocks"
+    config_dir.mkdir()
+
+    config_file = config_dir / "mockyfast.yaml"
+    config_file.write_text(
+        """
+routes:
+  - method: GET
+    path: /leak
+    response:
+      data_source:
+        type: json
+        file: ../../outside.json
+        mode: all
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="JSON file must stay inside the configuration directory",
+    ):
+        load_config(str(config_file))
+
+
+def test_load_config_raises_if_body_from_escapes_the_config_directory(tmp_path):
+    outside_file = tmp_path.parent / "outside_body.json"
+    outside_file.write_text('{"ok": true}', encoding="utf-8")
+
+    config_dir = tmp_path / "mocks"
+    config_dir.mkdir()
+
+    config_file = config_dir / "mockyfast.yaml"
+    config_file.write_text(
+        """
+routes:
+  - method: GET
+    path: /leak
+    response:
+      body_from: ../../outside_body.json
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="JSON file must stay inside the configuration directory",
+    ):
+        load_config(str(config_file))
+
+
+def test_load_config_raises_if_mutable_data_source_has_no_resource_name(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.resource_name' in route #1 is required when mutable is true",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_mutable_data_source_has_no_key_field(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        resource_name: users
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.key_field' in route #1 is required when mutable is true",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_mutable_route_uses_an_unsupported_method(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: HEAD
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+        mutable: true
+        key_field: id
+        resource_name: users
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'method' in route #1 must be one of: .* when mutable is true",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_if_mutable_delete_has_no_where(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: DELETE
+    path: /users/{user_id}
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.where' in route #1 is required for DELETE",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_allows_a_mutable_write_route_without_mode(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: POST
+    path: /users
+    response:
+      status_code: 201
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+""",
+    )
+
+    config = load_config(config_path)
+
+    assert "mode" not in config["routes"][0]["response"]["data_source"]
+
+
+def test_load_config_still_requires_mode_on_a_read_route(tmp_path):
+    write_json_data(tmp_path)
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mutable: true
+        key_field: id
+        resource_name: users
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.mode' in route #1 must be 'first' or 'all'",
+    ):
+        load_config(config_path)

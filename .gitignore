@@ -11,3 +11,5 @@ build/
 *.egg-info/
 .vscode/
 .idea/
+.ruff_cache/
+

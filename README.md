@@ -90,6 +90,7 @@ mkf serve mockyfast.yaml --port 8000
 | `init` | `--from-data <path>` | Generate the config from a data file or folder |
 | `serve` | `--reload` | Restart when the config or its data files change |
 | `serve` | `--no-index` | Do not serve the generated route index at `/` |
+| `serve` | `--no-cors` | Do not send permissive CORS headers |
 | `serve` | `--host` / `--port` | Bind address (defaults `127.0.0.1:8000`) |
 
 `validate` and `serve` accept either a YAML config, a data folder, or a single
@@ -568,15 +569,15 @@ curl -X DELETE http://127.0.0.1:8000/users/4
 |---|---|---|---|
 | `GET` | required | optional | Reads from the store, honouring `wrap` and `not_found_*` |
 | `POST` | ignored | not used | Creates a resource from the request body |
-| `PUT` | ignored | required | Merges the request body into the matched resource |
-| `PATCH` | ignored | required | Same as `PUT` |
+| `PUT` | ignored | required | **Replaces** the resource with the request body |
+| `PATCH` | ignored | required | **Merges** the request body into the resource |
 | `DELETE` | ignored | required | Removes the matched resource, returns `{"deleted": true}` |
 
 ### Write rules
 
 - The request body must be a JSON **object** — anything else returns `400`.
 - `POST` requires `key_field` in the body (`400` if missing) and rejects an existing key with `409`.
-- `PUT` and `PATCH` merge the body into the stored resource; keys not present in the body are preserved.
+- `PUT` replaces the resource: fields absent from the body are dropped. `PATCH` merges, preserving them. The key field survives both.
 - `PUT` and `PATCH` cannot change `key_field` — attempting to do so returns `400`.
 - When `PUT`, `PATCH`, or `DELETE` match nothing, the configured `not_found_status` / `not_found_body` are used (default `404`).
 
@@ -726,6 +727,9 @@ This is useful when you want to simulate:
 - **Non-mutable data files are re-read on every request.** Editing a CSV or JSON data source is picked up without restarting the server. `mutable` sources are the exception: they are read once at startup.
 - **Referenced files must stay inside the config directory.** `body_from` and `data_source.file` cannot escape the folder containing the YAML file.
 - **State is per-process.** The in-memory store is not shared between server restarts or between multiple processes.
+- **CORS is permissive by default** (`Access-Control-Allow-Origin: *`, without credentials), because a mock server exists to be called from a dev server on another port. Turn it off with `serve --no-cors`.
+- **Resource names must be unique.** The name identifies the shared store, so two resources claiming one name is an error rather than a silent merge. In zero-config mode this means `users.json` and `users.csv` cannot sit in the same folder.
+- **The route index reports file names, not paths**, so it does not publish your directory layout.
 - **`--reload` needs `watchfiles`**, which ships as a dependency. Without it uvicorn falls back to a reloader that only watches `*.py`, so config changes would go unnoticed; `serve --reload` refuses to start rather than pretend.
 - **The index at `/` is generated only when no route claims that path.** Declare your own `GET /` and it takes over.
 
@@ -788,6 +792,7 @@ This helps catch issues like:
 - invalid CSV schema configuration
 - incomplete `mutable` configuration (`key_field`, `resource_name`, `where`)
 - invalid `resources:` entries
+- duplicate resource names
 
 It also reports warnings that do not make a config invalid, such as a route
 made unreachable by an earlier, more general one.

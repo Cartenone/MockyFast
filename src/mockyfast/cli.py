@@ -139,6 +139,11 @@ def serve_command(
         "--index/--no-index",
         help="Serve a generated route index at /",
     ),
+    cors: bool = typer.Option(
+        True,
+        "--cors/--no-cors",
+        help="Allow requests from any origin, so a browser app can call the mock",
+    ),
 ) -> None:
     """
     Start the mock server.
@@ -159,6 +164,7 @@ def serve_command(
 
         os.environ["MOCKYFAST_CONFIG"] = str(Path(config).resolve())
         os.environ["MOCKYFAST_INDEX"] = "1" if index else "0"
+        os.environ["MOCKYFAST_CORS"] = "1" if cors else "0"
 
         uvicorn.run(
             "mockyfast.app:create_app_from_env",
@@ -172,7 +178,7 @@ def serve_command(
         )
         return
 
-    fastapi_app = create_app(config, with_index=index)
+    fastapi_app = create_app(config, with_index=index, with_cors=cors)
     uvicorn.run(fastapi_app, host=host, port=port)
 
 

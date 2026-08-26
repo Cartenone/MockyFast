@@ -25,8 +25,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   watches `*.py`, so `--reload` would run but never notice a config change.
   `serve --reload` now refuses to start rather than silently do nothing.
 
+- Permissive CORS headers by default, so a browser app on another port can call
+  the mock. Disable with `serve --no-cors`.
+
+### Fixed
+
+- Two resources sharing a name silently served one another's data, because the
+  name identifies the store. Duplicate names are now rejected, including the
+  zero-config case where `users.json` and `users.csv` both wanted `/users`.
+- A resource's data file was read once per generated route, so a six-route
+  resource opened it six times at startup. It is now read once.
+
 ### Changed
 
+- `PUT` now replaces a mutable resource and `PATCH` merges into it, instead of
+  both merging. The key field survives either way.
+- The route index reports data file names rather than their paths, so it does
+  not publish the directory layout of the machine running it.
 - `routes:` is no longer required when `resources:` is present. The error for a
   config with neither now reads "Missing 'routes' or 'resources' key".
 

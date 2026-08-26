@@ -13,6 +13,9 @@ class InMemoryResourceStore:
     def __init__(self) -> None:
         self._resources: dict[str, list[dict[str, Any]]] = {}
 
+    def has(self, resource_name: str) -> bool:
+        return resource_name in self._resources
+
     def seed(self, resource_name: str, rows: list[dict[str, Any]]) -> None:
         if resource_name not in self._resources:
             self._resources[resource_name] = deepcopy(rows)
@@ -59,6 +62,25 @@ class InMemoryResourceStore:
                 updated.update(payload)
                 rows[index] = updated
                 return deepcopy(updated)
+
+        return None
+
+    def replace(
+        self,
+        resource_name: str,
+        key_field: str,
+        key_value: Any,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Swap the whole resource for the payload, keeping its key field."""
+        rows = self._resources.get(resource_name, [])
+
+        for index, row in enumerate(rows):
+            if row_matches_key(row, key_field, key_value):
+                replacement = deepcopy(payload)
+                replacement[key_field] = row[key_field]
+                rows[index] = replacement
+                return deepcopy(replacement)
 
         return None
 

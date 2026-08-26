@@ -165,8 +165,22 @@ def expand_resources(config: dict) -> dict:
         raise ValueError("'resources' must be a list.")
 
     generated: list[dict[str, Any]] = []
+    seen_names: dict[str, int] = {}
+
     for index, resource in enumerate(resources, start=1):
-        generated.extend(build_resource_routes(resource, index))
+        routes = build_resource_routes(resource, index)
+        name = resource["name"]
+
+        # The name is the store identity, so two resources sharing it would
+        # silently serve one another's data.
+        if name in seen_names:
+            raise ValueError(
+                f"Resource #{index} reuses the name '{name}' already taken by "
+                f"resource #{seen_names[name]}; resource names must be unique."
+            )
+
+        seen_names[name] = index
+        generated.extend(routes)
 
     declared = config.get("routes") or []
     if not isinstance(declared, list):
@@ -230,9 +244,21 @@ def build_config_from_data(data_path: Path) -> tuple[dict, Path]:
             f"No .json or .csv data file found in: {data_path}"
         )
 
+    seen_stems: dict[str, str] = {}
     resources = []
+
     for data_file in data_files:
         source_type = DATA_FILE_SUFFIXES[data_file.suffix.lower()]
+
+        # users.json and users.csv would both want to be the 'users' resource.
+        if data_file.stem in seen_stems:
+            raise ValueError(
+                f"'{data_file.name}' and '{seen_stems[data_file.stem]}' would both "
+                f"become the '{data_file.stem}' resource. Rename one, or write a "
+                f"config with 'mkf init --from-data'."
+            )
+
+        seen_stems[data_file.stem] = data_file.name
 
         resources.append(
             {

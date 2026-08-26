@@ -3,9 +3,11 @@ import html
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from mockyfast.config import load_config_source, load_json_file
@@ -154,6 +156,11 @@ def seed_mutable_store_for_route(
         return
 
     resource_name = get_resource_name(route)
+
+    # A resource expands to several routes sharing one store, so without this
+    # the same file would be read once per route.
+    if store.has(resource_name):
+        return
 
     if data_source["type"] == "csv":
         rows = load_csv_rows(config_path, data_source["file"])
@@ -381,6 +388,8 @@ async def handle_mutable_update(
     data_source: dict,
     request: Request,
     store: InMemoryResourceStore,
+    *,
+    replace: bool,
 ) -> ResponseOutcome:
     payload, error = await read_json_object(request)
     if error is not None:
@@ -403,7 +412,9 @@ async def handle_mutable_update(
             status_code=400,
         )
 
-    updated = store.update(
+    write = store.replace if replace else store.update
+
+    updated = write(
         resource_name=resource_name,
         key_field=match_field,
         key_value=match_value,
@@ -458,8 +469,15 @@ async def build_route_outcome(
         if method == "POST":
             return await handle_mutable_create(route, data_source, request, store)
 
+        # PUT replaces the resource, PATCH merges into it.
         if method in {"PUT", "PATCH"}:
-            return await handle_mutable_update(route, data_source, request, store)
+            return await handle_mutable_update(
+                route,
+                data_source,
+                request,
+                store,
+                replace=method == "PUT",
+            )
 
         if method == "DELETE":
             return handle_mutable_delete(route, data_source, request, store)
@@ -493,7 +511,10 @@ def describe_routes(routes: list[dict]) -> list[dict[str, Any]]:
 
         data_source = route.get("response", {}).get("data_source")
         if data_source:
-            entry["source"] = data_source.get("file")
+            # Only the file name: the index is reachable over the network and
+            # the directory layout is nobody else's business.
+            source = data_source.get("file")
+            entry["source"] = PurePosixPath(source).name if source else None
             entry["mutable"] = bool(data_source.get("mutable", False))
 
             resource_name = data_source.get("resource_name")
@@ -569,10 +590,26 @@ def add_index_route(app: FastAPI, routes: list[dict]) -> None:
     app.add_api_route("/", index, methods=["GET"], include_in_schema=False)
 
 
-def create_app(config_path: str, *, with_index: bool = True) -> FastAPI:
+def create_app(
+    config_path: str,
+    *,
+    with_index: bool = True,
+    with_cors: bool = True,
+) -> FastAPI:
     config, resolved_config_path = load_config_source(config_path)
     app = FastAPI(title="MockyFast")
     app.state.store = InMemoryResourceStore()
+
+    if with_cors:
+        # A mock server exists to be called from a dev server on another port,
+        # so a browser would block every request without this.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     routes = config.get("routes") or []
     app.state.routes = routes
@@ -628,5 +665,6 @@ def create_app_from_env() -> FastAPI:
     """Factory used by `mkf serve --reload`, which needs an import string."""
     config_path = os.environ["MOCKYFAST_CONFIG"]
     with_index = os.environ.get("MOCKYFAST_INDEX", "1") != "0"
+    with_cors = os.environ.get("MOCKYFAST_CORS", "1") != "0"
 
-    return create_app(config_path, with_index=with_index)
+    return create_app(config_path, with_index=with_index, with_cors=with_cors)

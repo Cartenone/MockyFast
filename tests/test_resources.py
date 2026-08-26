@@ -331,7 +331,8 @@ def test_index_route_lists_the_served_routes(tmp_path):
     assert payload["routes"][0] == {
         "method": "GET",
         "path": "/users",
-        "source": "./data/users.json",
+        # The file name only: the index must not publish the directory layout.
+        "source": "users.json",
         "mutable": True,
         "resource": "users",
     }
@@ -484,3 +485,121 @@ routes:
     )
 
     assert collect_warnings(config) == []
+
+
+# ------------------------------------------------------- audit regressions
+
+
+def test_duplicate_resource_names_are_rejected(tmp_path):
+    write_data(tmp_path)
+
+    with pytest.raises(ValueError, match="reuses the name 'users'"):
+        load_config(
+            write_config(
+                tmp_path,
+                """
+resources:
+  - name: users
+    source:
+      type: json
+      file: ./data/users.json
+
+  - name: users
+    path: /people
+    source:
+      type: json
+      file: ./data/users.json
+""",
+            )
+        )
+
+
+def test_data_files_colliding_on_a_name_are_rejected(tmp_path):
+    data_dir = write_data(tmp_path)
+    (data_dir / "users.csv").write_text("id,name\n1,Mario\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="would both become the 'users' resource"):
+        build_config_from_data(data_dir)
+
+
+def test_seed_reads_each_data_file_once(tmp_path, monkeypatch):
+    write_data(tmp_path)
+
+    import mockyfast.app as app_module
+
+    reads = []
+    original = app_module.load_json_rows
+
+    def counting(config_path, relative_path):
+        reads.append(relative_path)
+        return original(config_path, relative_path)
+
+    monkeypatch.setattr(app_module, "load_json_rows", counting)
+
+    # Six routes share one store, so the file must still be read only once.
+    create_app(write_config(tmp_path, RESOURCE_CONFIG))
+
+    assert len(reads) == 1
+
+
+def test_put_replaces_the_resource(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "users.json").write_text(
+        '[{"id": 1, "name": "Mario", "role": "admin"}]', encoding="utf-8"
+    )
+
+    client = TestClient(create_app(write_config(tmp_path, RESOURCE_CONFIG)))
+
+    response = client.put("/users/1", json={"name": "Solo nome"})
+
+    assert response.status_code == 200
+    # 'role' is gone: PUT replaces, and the key field survives.
+    assert response.json() == {"id": 1, "name": "Solo nome"}
+
+
+def test_patch_merges_into_the_resource(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "users.json").write_text(
+        '[{"id": 1, "name": "Mario", "role": "admin"}]', encoding="utf-8"
+    )
+
+    client = TestClient(create_app(write_config(tmp_path, RESOURCE_CONFIG)))
+
+    response = client.patch("/users/1", json={"name": "Mario B"})
+
+    assert response.json() == {"id": 1, "name": "Mario B", "role": "admin"}
+
+
+def test_cors_headers_let_a_browser_app_call_the_mock(tmp_path):
+    write_data(tmp_path)
+
+    client = TestClient(create_app(write_config(tmp_path, RESOURCE_CONFIG)))
+
+    preflight = client.options(
+        "/users",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "*"
+
+    simple = client.get("/users", headers={"Origin": "http://localhost:3000"})
+    assert simple.headers["access-control-allow-origin"] == "*"
+
+
+def test_cors_can_be_disabled(tmp_path):
+    write_data(tmp_path)
+
+    client = TestClient(
+        create_app(write_config(tmp_path, RESOURCE_CONFIG), with_cors=False),
+        raise_server_exceptions=False,
+    )
+
+    simple = client.get("/users", headers={"Origin": "http://localhost:3000"})
+
+    assert "access-control-allow-origin" not in simple.headers

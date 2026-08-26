@@ -19,31 +19,59 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 
 ## Features
 
+**Getting started**
+
 - serve a folder of JSON/CSV files as a REST API with no configuration at all
 - declare a whole CRUD resource in a few lines with `resources:`
-- initialize a sample config file, or generate one from existing data
-- validate mock configuration before running, with warnings for unreachable routes
-- restart automatically when the configuration changes (`--reload`)
+- generate a config from existing data with `init --from-data`
 - browse the served routes at `/`
-- serve mock HTTP endpoints locally
-- support inline JSON responses
-- support external JSON response files
-- support data-driven mocks backed by:
-  - CSV files
-  - JSON files
-- support stateful mocks with in-memory CRUD (`mutable`)
-- support response shaping for data sources:
-  - `wrap`
-  - `not_found_status`
-  - `not_found_body`
-- support CSV type coercion and schema mapping
-- support path parameters
-- support request matching by:
-  - query params
-  - headers
-  - JSON body
-- support delayed responses with `delay_ms`
+- restart automatically on config changes with `serve --reload`
+
+**Responses**
+
+- inline bodies, external JSON files, and CSV/JSON-backed data sources
+- templates: `{{uuid}}`, `{{now}}`, `{{randint:1:9}}`, and echoes of the request
+- path parameters
+- CSV type coercion and schema mapping
+- response shaping: `wrap`, `not_found_status`, `not_found_body`
+- answer differently on successive calls with `responses:`
+
+**Behaviour**
+
+- stateful in-memory CRUD with `mutable`, optionally saved across restarts
+- filtering, sorting and paging on list routes
+- request matching by query params, headers and JSON body, with operators
+  (`matches`, `contains`, `one_of`, `gte`, `absent`, …)
+- latency with `delay_ms`, fixed or as a range
+- failure simulation with `fault`
+
+**Tooling**
+
+- `validate` checks the config before the server starts, and warns about
+  unreachable routes
+- `explain` shows which route answers a request, and why the others do not
+- permissive CORS by default, so a browser app can call the mock
 - automated tests with `pytest`
+
+---
+
+## Contents
+
+- [Installation](#installation) · [Commands](#commands) · [Quick start](#quick-start)
+- **Responses**: [inline](#example-configuration) ·
+  [external files](#using-external-json-files) ·
+  [data-driven](#data-driven-mocks) ·
+  [templates](#response-templates) ·
+  [sequences](#response-sequences)
+- **Resources**: [shorthand](#resources-a-whole-crud-api-in-a-few-lines) ·
+  [stateful CRUD](#stateful-mocks) ·
+  [filter/sort/page](#filtering-sorting-and-paging) ·
+  [persistence](#keeping-state-across-restarts)
+- **Behaviour**: [request matching](#request-matching) ·
+  [latency and faults](#latency-and-faults) ·
+  [notes](#behaviour-notes)
+- **Tooling**: [validation](#validation) · [explain](#explaining-a-request) ·
+  [development](#development)
 
 ---
 
@@ -84,20 +112,29 @@ mkf validate mockyfast.yaml
 mkf serve mockyfast.yaml --port 8000
 ```
 
-### Options
+### Reference
+
+```text
+mkf init     [--output FILE] [--from-data PATH]
+mkf validate CONFIG
+mkf serve    CONFIG [--host HOST] [--port PORT] [--reload] [--no-index] [--no-cors]
+mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
+```
 
 | Command | Option | Description |
 |---|---|---|
+| `init` | `--output <file>` | Where to write the config (default `mockyfast.yaml`) |
 | `init` | `--from-data <path>` | Generate the config from a data file or folder |
+| `serve` | `--host` | Bind address (default `127.0.0.1`) |
+| `serve` | `--port` | Bind port (default `8000`) |
 | `serve` | `--reload` | Restart when the config or its data files change |
-| `serve` | `--no-index` | Do not serve the generated route index at `/` |
-| `serve` | `--no-cors` | Do not send permissive CORS headers |
-| `serve` | `--host` / `--port` | Bind address (defaults `127.0.0.1:8000`) |
-| `explain` | `-H 'Name: value'` | Request header; repeatable |
+| `serve` | `--no-index` | Do not serve the generated route index at `/` (on by default) |
+| `serve` | `--no-cors` | Do not send permissive CORS headers (on by default) |
+| `explain` | `-H` / `--header` | Request header as `'Name: value'`; repeatable |
 | `explain` | `--body '{...}'` | JSON request body |
 
-`validate` and `serve` accept either a YAML config, a data folder, or a single
-data file.
+`CONFIG` is a YAML file, a data folder, or a single `.json`/`.csv` data file.
+`explain` exits non-zero when no route answers the request.
 
 ---
 
@@ -1000,10 +1037,12 @@ That makes it easier to:
 ```text
 mocks/
 ├─ mockyfast.yaml
-├─ data/
+├─ data/                     seed data, versioned
 │  ├─ users.csv
 │  └─ users.json
-└─ responses/
+├─ responses/                whole bodies for body_from
+│  └─ users.json
+└─ .mockyfast-state/         written by `persist`, gitignored
    └─ users.json
 ```
 
@@ -1025,19 +1064,20 @@ mkf validate mockyfast.yaml
 
 This helps catch issues like:
 
-- missing `routes`
+- missing `routes` or `resources`
 - invalid route structure
 - unknown HTTP methods, or paths not starting with `/`
-- missing JSON files
-- missing CSV files
+- missing JSON or CSV files
 - files referenced outside the configuration directory
-- invalid `status_code`
-- invalid `delay_ms`
-- invalid request matching config
+- invalid `status_code`, `delay_ms` or `delay_ms` range
+- invalid request matching config, including regular expressions that do not
+  compile and operator arguments of the wrong type
 - invalid CSV schema configuration
 - incomplete `mutable` configuration (`key_field`, `resource_name`, `where`)
-- invalid `resources:` entries
-- duplicate resource names
+- invalid `resources:` entries, and duplicate resource names
+- a route defining both `response` and `responses`, or an empty `responses`
+- invalid `fault` settings
+- `persist` without `mutable`
 
 It also reports warnings that do not make a config invalid, such as a route
 made unreachable by an earlier, more general one.
@@ -1070,19 +1110,16 @@ ruff check .
 
 Planned improvements:
 
-- dynamic response templates (`{{uuid}}`, `{{now}}`, faker, request echo)
-- richer request matching (regex, contains, JSONPath)
-- filtering, sorting and pagination on resource list routes
-- `mkf explain` to show which route answers a given request
-- persisting mutable state across restarts
-- OpenAPI import
-- stateful scenarios and richer fault injection
-- HTTP client / probe mode
+- a published JSON Schema for the config, for editor autocompletion
+- OpenAPI import, to generate mocks from an existing spec
+- an admin API to reset state and inspect received requests
+- richer body matching (JSONPath)
+- faker-style generators for names, emails and addresses
 - capture real API responses into reusable mock files
 
 Future exploration:
 
-- record & replay mode
+- record & replay proxy mode
 - GraphQL support
 - WebSocket mocking
 - gRPC support

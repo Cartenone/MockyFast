@@ -9,6 +9,8 @@ dependencies = [
   "uvicorn",
   "typer",
   "pyyaml",
+  # uvicorn's fallback reloader only watches *.py, so `serve --reload` needs this.
+  "watchfiles",
 ]
 
 [project.optional-dependencies]

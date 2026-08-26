@@ -1,91 +1,10 @@
-routes:
-  - method: GET
+resources:
+  - name: users
     path: /users
-    response:
-      data_source:
-        type: json
-        file: ./data/users.json
-        mode: all
-        mutable: true
-        key_field: id
-        resource_name: users
-        wrap: items
-
-  - method: GET
-    path: /users/{user_id}
-    response:
-      data_source:
-        type: json
-        file: ./data/users.json
-        mode: first
-        mutable: true
-        key_field: id
-        resource_name: users
-        not_found_status: 404
-        not_found_body:
-          error: user_not_found
-        where:
-          field: id
-          equals_path_param: user_id
-
-  - method: POST
-    path: /users
-    response:
-      status_code: 201
-      data_source:
-        type: json
-        file: ./data/users.json
-        mutable: true
-        key_field: id
-        resource_name: users
-
-  - method: PUT
-    path: /users/{user_id}
-    response:
-      status_code: 200
-      data_source:
-        type: json
-        file: ./data/users.json
-        mutable: true
-        key_field: id
-        resource_name: users
-        not_found_status: 404
-        not_found_body:
-          error: user_not_found
-        where:
-          field: id
-          equals_path_param: user_id
-
-  - method: PATCH
-    path: /users/{user_id}
-    response:
-      status_code: 200
-      data_source:
-        type: json
-        file: ./data/users.json
-        mutable: true
-        key_field: id
-        resource_name: users
-        not_found_status: 404
-        not_found_body:
-          error: user_not_found
-        where:
-          field: id
-          equals_path_param: user_id
-
-  - method: DELETE
-    path: /users/{user_id}
-    response:
-      status_code: 200
-      data_source:
-        type: json
-        file: ./data/users.json
-        mutable: true
-        key_field: id
-        resource_name: users
-        not_found_status: 404
-        not_found_body:
-          error: user_not_found
-        where:
-          field: id
-          equals_path_param: user_id
+    source:
+      type: json
+      file: ./data/users.json
+    key_field: id
+    wrap: items
+    not_found_body:
+      error: user_not_found

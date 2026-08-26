@@ -19,8 +19,12 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 
 ## Features
 
-- initialize a sample config file
-- validate mock configuration before running
+- serve a folder of JSON/CSV files as a REST API with no configuration at all
+- declare a whole CRUD resource in a few lines with `resources:`
+- initialize a sample config file, or generate one from existing data
+- validate mock configuration before running, with warnings for unreachable routes
+- restart automatically when the configuration changes (`--reload`)
+- browse the served routes at `/`
 - serve mock HTTP endpoints locally
 - support inline JSON responses
 - support external JSON response files
@@ -79,9 +83,48 @@ mkf validate mockyfast.yaml
 mkf serve mockyfast.yaml --port 8000
 ```
 
+### Options
+
+| Command | Option | Description |
+|---|---|---|
+| `init` | `--from-data <path>` | Generate the config from a data file or folder |
+| `serve` | `--reload` | Restart when the config or its data files change |
+| `serve` | `--no-index` | Do not serve the generated route index at `/` |
+| `serve` | `--host` / `--port` | Bind address (defaults `127.0.0.1:8000`) |
+
+`validate` and `serve` accept either a YAML config, a data folder, or a single
+data file.
+
 ---
 
 ## Quick start
+
+### The shortest path: no configuration
+
+Point MockyFast at a folder of `.json` or `.csv` files and it derives a full
+CRUD API from them:
+
+```bash
+mkf serve ./data
+```
+
+```text
+data/
+├─ users.json      ->  GET/POST /users, GET/PUT/PATCH/DELETE /users/{id}
+└─ products.csv    ->  GET/POST /products, GET/PUT/PATCH/DELETE /products/{sku}
+```
+
+The key field is detected automatically: `id` when the data has one, otherwise
+the first column. Open <http://127.0.0.1:8000/> to see every route that was
+generated.
+
+When you outgrow it, write the equivalent config out and edit it by hand:
+
+```bash
+mkf init --from-data ./data
+```
+
+### Starting from a config
 
 Create a sample config:
 
@@ -344,6 +387,86 @@ When `schema` is present, it takes precedence over `coerce_types`.
 
 ---
 
+## Resources: a whole CRUD API in a few lines
+
+Declaring the five routes of a REST resource by hand means repeating the same
+`data_source` block five times. A `resources:` entry describes the resource
+once and expands into the equivalent routes before validation runs:
+
+```yaml
+resources:
+  - name: users
+    path: /users
+    source:
+      type: json
+      file: ./data/users.json
+    key_field: id
+    wrap: items
+    not_found_body:
+      error: user_not_found
+```
+
+That produces six routes:
+
+```text
+GET     /users
+GET     /users/{id}
+POST    /users
+PUT     /users/{id}
+PATCH   /users/{id}
+DELETE  /users/{id}
+```
+
+| Key | Required | Default | Description |
+|---|---|---|---|
+| `name` | yes | — | Resource name, also the store identity |
+| `path` | no | `/<name>` | Base path of the collection |
+| `source` | yes | — | `type` (`csv`/`json`) and `file` |
+| `key_field` | no | `id` | Primary key, also the path parameter name |
+| `methods` | no | all | Any of `list`, `get`, `create`, `update`, `delete` |
+| `wrap` | no | — | Applied to the list route only |
+| `not_found_status` | no | `404` | Applied to the single-resource routes |
+| `not_found_body` | no | — | Applied to the single-resource routes |
+| `delay_ms` | no | — | Applied to every generated route |
+
+Resources are always stateful: they expand into `mutable` data sources sharing
+one store, so a `POST` is visible to every other route of the resource.
+
+Read-only resources are just a restricted method list:
+
+```yaml
+resources:
+  - name: countries
+    source:
+      type: csv
+      file: ./data/countries.csv
+    methods: [list, get]
+```
+
+### Mixing with explicit routes
+
+`routes:` and `resources:` can live in the same file. Declared routes are
+registered first, so a hand-written `/users/me` still wins over the generated
+`/users/{id}`:
+
+```yaml
+routes:
+  - method: GET
+    path: /users/me
+    response:
+      body:
+        id: 1
+        name: Mario
+
+resources:
+  - name: users
+    source:
+      type: json
+      file: ./data/users.json
+```
+
+---
+
 ## Stateful mocks
 
 Set `mutable: true` to turn a data source into a writable in-memory resource. The file is read **once at startup** to seed the store, and every request after that reads and writes the in-memory copy.
@@ -603,6 +726,8 @@ This is useful when you want to simulate:
 - **Non-mutable data files are re-read on every request.** Editing a CSV or JSON data source is picked up without restarting the server. `mutable` sources are the exception: they are read once at startup.
 - **Referenced files must stay inside the config directory.** `body_from` and `data_source.file` cannot escape the folder containing the YAML file.
 - **State is per-process.** The in-memory store is not shared between server restarts or between multiple processes.
+- **`--reload` needs `watchfiles`**, which ships as a dependency. Without it uvicorn falls back to a reloader that only watches `*.py`, so config changes would go unnoticed; `serve --reload` refuses to start rather than pretend.
+- **The index at `/` is generated only when no route claims that path.** Declare your own `GET /` and it takes over.
 
 ---
 
@@ -662,6 +787,10 @@ This helps catch issues like:
 - invalid request matching config
 - invalid CSV schema configuration
 - incomplete `mutable` configuration (`key_field`, `resource_name`, `where`)
+- invalid `resources:` entries
+
+It also reports warnings that do not make a config invalid, such as a route
+made unreachable by an earlier, more general one.
 
 ---
 
@@ -691,16 +820,18 @@ ruff check .
 
 Planned improvements:
 
-- better error messages and validation feedback
+- dynamic response templates (`{{uuid}}`, `{{now}}`, faker, request echo)
+- richer request matching (regex, contains, JSONPath)
+- filtering, sorting and pagination on resource list routes
+- `mkf explain` to show which route answers a given request
+- persisting mutable state across restarts
+- OpenAPI import
+- stateful scenarios and richer fault injection
 - HTTP client / probe mode
 - capture real API responses into reusable mock files
-- more advanced matching rules
-- extended fault injection beyond `delay_ms`
-- persisting mutable state across restarts
 
 Future exploration:
 
-- OpenAPI-based mock generation
 - record & replay mode
 - GraphQL support
 - WebSocket mocking

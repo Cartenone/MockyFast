@@ -1,12 +1,14 @@
 import asyncio
+import html
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
-from mockyfast.config import load_config, load_json_file
+from mockyfast.config import load_config_source, load_json_file
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
 from mockyfast.state_store import InMemoryResourceStore
@@ -479,16 +481,105 @@ async def build_route_outcome(
     )
 
 
-def create_app(config_path: str) -> FastAPI:
-    config = load_config(config_path)
+def describe_routes(routes: list[dict]) -> list[dict[str, Any]]:
+    """A compact, serialisable summary of what the server is serving."""
+    described = []
+
+    for route in routes:
+        entry: dict[str, Any] = {
+            "method": str(route["method"]).upper(),
+            "path": route["path"],
+        }
+
+        data_source = route.get("response", {}).get("data_source")
+        if data_source:
+            entry["source"] = data_source.get("file")
+            entry["mutable"] = bool(data_source.get("mutable", False))
+
+            resource_name = data_source.get("resource_name")
+            if resource_name:
+                entry["resource"] = resource_name
+
+        described.append(entry)
+
+    return described
+
+
+def render_index_html(entries: list[dict[str, Any]]) -> str:
+    rows = []
+
+    for entry in entries:
+        badge = "mutable" if entry.get("mutable") else ""
+        source = entry.get("source") or ""
+
+        rows.append(
+            "<tr>"
+            f'<td><span class="m m-{html.escape(entry["method"].lower())}">'
+            f'{html.escape(entry["method"])}</span></td>'
+            f'<td><code>{html.escape(entry["path"])}</code></td>'
+            f'<td class="dim">{html.escape(source)}</td>'
+            f'<td><span class="tag">{html.escape(badge)}</span></td>'
+            "</tr>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MockyFast</title>
+<style>
+:root {{ color-scheme: light dark; --fg:#111; --dim:#666; --bd:#e3e3e3; --bg:#fff; --tag:#eef; }}
+@media (prefers-color-scheme: dark) {{
+  :root {{ --fg:#eee; --dim:#999; --bd:#333; --bg:#151515; --tag:#243; }}
+}}
+body {{ font:15px/1.5 ui-sans-serif,system-ui,sans-serif; margin:0; padding:2.5rem 1.5rem;
+       color:var(--fg); background:var(--bg); }}
+main {{ max-width:52rem; margin:0 auto; }}
+h1 {{ font-size:1.4rem; margin:0 0 .25rem; }}
+p.sub {{ color:var(--dim); margin:0 0 2rem; }}
+table {{ border-collapse:collapse; width:100%; }}
+td, th {{ text-align:left; padding:.55rem .6rem; border-bottom:1px solid var(--bd); }}
+th {{ font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); }}
+code {{ font:13px ui-monospace,monospace; }}
+.dim {{ color:var(--dim); font-size:.85rem; }}
+.m {{ font:600 11px ui-monospace,monospace; padding:.15rem .4rem; border-radius:3px;
+     border:1px solid var(--bd); }}
+.m-get {{ color:#2a7; }} .m-post {{ color:#e83; }} .m-put, .m-patch {{ color:#39c; }}
+.m-delete {{ color:#d55; }}
+.tag:not(:empty) {{ background:var(--tag); font-size:.7rem; padding:.15rem .4rem;
+                   border-radius:3px; }}
+</style></head>
+<body><main>
+<h1>MockyFast</h1>
+<p class="sub">{len(entries)} route(s) served. This index is generated because no
+route is declared for <code>/</code>.</p>
+<table><thead><tr><th>Method</th><th>Path</th><th>Source</th><th></th></tr></thead>
+<tbody>{"".join(rows)}</tbody></table>
+</main></body></html>"""
+
+
+def add_index_route(app: FastAPI, routes: list[dict]) -> None:
+    entries = describe_routes(routes)
+
+    async def index(request: Request):
+        if "text/html" in request.headers.get("accept", ""):
+            return HTMLResponse(render_index_html(entries))
+
+        return JSONResponse({"routes": entries})
+
+    app.add_api_route("/", index, methods=["GET"], include_in_schema=False)
+
+
+def create_app(config_path: str, *, with_index: bool = True) -> FastAPI:
+    config, resolved_config_path = load_config_source(config_path)
     app = FastAPI(title="MockyFast")
     app.state.store = InMemoryResourceStore()
 
-    routes = config.get("routes", [])
+    routes = config.get("routes") or []
+    app.state.routes = routes
     grouped_routes = defaultdict(list)
 
     for route in routes:
-        seed_mutable_store_for_route(route, config_path, app.state.store)
+        seed_mutable_store_for_route(route, resolved_config_path, app.state.store)
 
     for route in routes:
         method = route["method"].upper()
@@ -500,7 +591,7 @@ def create_app(config_path: str) -> FastAPI:
         async def handler(
             request: Request,
             _route_group=route_group,
-            _config_path=config_path,
+            _config_path=resolved_config_path,
         ):
             for route in _route_group:
                 if not await route_matches(route, request):
@@ -527,4 +618,15 @@ def create_app(config_path: str) -> FastAPI:
 
         app.add_api_route(path, handler, methods=[method])
 
+    if with_index and not any(route["path"] == "/" for route in routes):
+        add_index_route(app, routes)
+
     return app
+
+
+def create_app_from_env() -> FastAPI:
+    """Factory used by `mkf serve --reload`, which needs an import string."""
+    config_path = os.environ["MOCKYFAST_CONFIG"]
+    with_index = os.environ.get("MOCKYFAST_INDEX", "1") != "0"
+
+    return create_app(config_path, with_index=with_index)

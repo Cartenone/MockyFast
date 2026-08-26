@@ -54,7 +54,7 @@ name: example
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Missing 'routes' key"):
+    with pytest.raises(ValueError, match="Missing 'routes' or 'resources' key"):
         load_config(str(config_file))
 
 

@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Zero-config mode: `mkf serve ./data` derives a full CRUD API from a folder of
+  `.json`/`.csv` files, or from a single data file, with no YAML at all. The key
+  field is detected from the data (`id` when present, else the first column).
+- `resources:` shorthand that expands one declaration into the five CRUD routes.
+  The bundled example config went from 91 lines to 10 for the same six routes.
+- `mkf init --from-data <path>` writes the config a data folder would produce,
+  so zero-config mode is a starting point rather than a dead end.
+- `mkf serve --reload` restarts when the config or its data files change.
+- A generated route index at `/`, as JSON or as an HTML page for browsers.
+  Disable it with `serve --no-index`, or declare your own `GET /`.
+- `mkf serve` prints the route table on startup.
+- `mkf validate` reports warnings for routes made unreachable by an earlier,
+  more general route.
+- `watchfiles` is now a dependency: without it uvicorn's fallback reloader only
+  watches `*.py`, so `--reload` would run but never notice a config change.
+  `serve --reload` now refuses to start rather than silently do nothing.
+
+### Changed
+
+- `routes:` is no longer required when `resources:` is present. The error for a
+  config with neither now reads "Missing 'routes' or 'resources' key".
+
 ## [0.2.0]
 
 ### Added

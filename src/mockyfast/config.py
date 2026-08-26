@@ -5,8 +5,14 @@ import yaml
 
 from mockyfast.datasources.csv_source import SUPPORTED_SCHEMA_TYPES
 from mockyfast.paths import resolve_data_path
+from mockyfast.resources import build_config_from_data, expand_resources
 
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+# Suffixes that make `mkf serve <path>` run without a YAML file at all.
+DATA_PATH_SUFFIXES = {".json", ".csv"}
+
+GENERATED_CONFIG_NAME = "mockyfast.generated.yaml"
 
 # Methods a mutable data source knows how to serve.
 MUTABLE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -35,15 +41,97 @@ def load_config(path: str) -> dict:
         raise ValueError("The YAML file must contain a root object.")
 
     routes = data.get("routes")
-    if routes is None:
-        raise ValueError("Missing 'routes' key in YAML file.")
+    resources = data.get("resources")
 
-    if not isinstance(routes, list):
+    if routes is None and resources is None:
+        raise ValueError("Missing 'routes' or 'resources' key in YAML file.")
+
+    if routes is not None and not isinstance(routes, list):
         raise ValueError("'routes' must be a list.")
+
+    data = expand_resources(data)
 
     validate_routes(data, path)
 
     return data
+
+
+def is_data_path(path: str) -> bool:
+    """True when the path is a data file or folder rather than a YAML config."""
+    candidate = Path(path)
+
+    if candidate.is_dir():
+        return True
+
+    return candidate.suffix.lower() in DATA_PATH_SUFFIXES
+
+
+def load_config_source(path: str) -> tuple[dict, str]:
+    """Load a YAML config, or derive one from a data file or folder.
+
+    Returns the config and the path its relative file references resolve
+    against. In data mode that path names a file that is never written: only
+    its parent directory matters.
+    """
+    if not is_data_path(path):
+        return load_config(path), path
+
+    config, base_path = build_config_from_data(Path(path))
+    config = expand_resources(config)
+
+    generated_path = str(base_path / GENERATED_CONFIG_NAME)
+    validate_routes(config, generated_path)
+
+    return config, generated_path
+
+
+def path_shadows(pattern: str, target: str) -> bool:
+    """True when `pattern` swallows every request that `target` would answer."""
+    if pattern == target:
+        return False
+
+    pattern_parts = pattern.strip("/").split("/")
+    target_parts = target.strip("/").split("/")
+
+    if len(pattern_parts) != len(target_parts):
+        return False
+
+    has_param = False
+
+    for pattern_part, target_part in zip(pattern_parts, target_parts, strict=True):
+        if pattern_part.startswith("{") and pattern_part.endswith("}"):
+            if target_part.startswith("{") and target_part.endswith("}"):
+                return False
+
+            has_param = True
+            continue
+
+        if pattern_part != target_part:
+            return False
+
+    return has_param
+
+
+def collect_warnings(config: dict) -> list[str]:
+    """Problems that do not make a config invalid but will surprise the user."""
+    warnings = []
+    seen: list[tuple[str, str, int]] = []
+
+    for index, route in enumerate(config.get("routes") or [], start=1):
+        method = str(route["method"]).upper()
+        path = route["path"]
+
+        for earlier_method, earlier_path, earlier_index in seen:
+            if earlier_method == method and path_shadows(earlier_path, path):
+                warnings.append(
+                    f"Route #{index} {method} {path} is unreachable: "
+                    f"route #{earlier_index} {earlier_method} {earlier_path} "
+                    f"matches those requests first."
+                )
+
+        seen.append((method, path, index))
+
+    return warnings
 
 
 def validate_routes(config: dict, config_path: str) -> None:

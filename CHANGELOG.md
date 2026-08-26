@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `mkf init --from-openapi spec.yaml` writes a configuration from an OpenAPI 3
+  document. Each operation becomes a route answering the lowest success status
+  the spec declares, and response schemas map onto the templates MockyFast
+  already renders: `{{randint:a:b}}` between an integer's bounds, `{{choice:a|b}}`
+  for a string enum, `{{uuid}}` and `{{now}}` for the matching formats. An
+  `example` written into the spec is used as it stands. `$ref`, `allOf` and
+  `oneOf` are resolved; a Swagger 2.0 file or a reference into another file is
+  refused with a message rather than half-imported.
+
 - A real OpenAPI document, served at `/openapi.json` and browsable at `/docs`,
   built from the configuration instead of from the handlers. It carries the
   status codes a route can return, the shape of the rows behind it with an
@@ -102,6 +111,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resource opened it six times at startup. It is now read once.
 
 ### Changed
+
+- `mkf init --from-data` and `mkf init --from-openapi` now report
+  "Configuration written to", where the first used to say "Sample file created"
+  about a file that is not a sample. The bare `mkf init` is unchanged.
 
 - Configuration validation is now a set of Pydantic models rather than 450 lines
   of hand-written checks, which is what makes a publishable JSON Schema

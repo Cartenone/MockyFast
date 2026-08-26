@@ -10,8 +10,12 @@ import yaml
 from mockyfast.app import create_app, describe_routes
 from mockyfast.config import collect_warnings, load_config_source
 from mockyfast.explain import describe_response, explain_request
-from mockyfast.models import config_json_schema
+from mockyfast.models import config_json_schema, validate_shape
 from mockyfast.openapi import build_openapi
+from mockyfast.openapi_import import (
+    build_config_from_openapi,
+    load_openapi_document,
+)
 from mockyfast.resources import build_config_from_data
 
 app = typer.Typer(help="Serve API mocks from YAML")
@@ -83,6 +87,34 @@ def watch_directory(config: str) -> str:
     return str(path if path.is_dir() else path.parent)
 
 
+def config_from_data(from_data: str, output_dir: Path) -> str:
+    try:
+        config, base_path = build_config_from_data(Path(from_data))
+    except Exception as exc:
+        typer.echo(f"Cannot read data path: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    rebase_source_files(config, base_path, output_dir)
+
+    return as_yaml(config)
+
+
+def config_from_openapi(from_openapi: str) -> str:
+    try:
+        config = build_config_from_openapi(load_openapi_document(Path(from_openapi)))
+        # A generated config that does not load would be worse than none.
+        validate_shape(config)
+    except Exception as exc:
+        typer.echo(f"Cannot read the OpenAPI document: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    return as_yaml(config)
+
+
+def as_yaml(config: dict) -> str:
+    return yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
+
+
 @app.command("init")
 def init_command(
     output: str = "mockyfast.yaml",
@@ -91,10 +123,19 @@ def init_command(
         "--from-data",
         help="Generate the config from a data file or folder instead of a sample",
     ),
+    from_openapi: str = typer.Option(
+        None,
+        "--from-openapi",
+        help="Generate the config from an OpenAPI 3 document instead of a sample",
+    ),
 ) -> None:
     """
-    Create a sample configuration file.
+    Create a configuration file, from a sample or from what you already have.
     """
+    if from_data and from_openapi:
+        typer.echo("Use one of --from-data and --from-openapi, not both.")
+        raise typer.Exit(code=1)
+
     path = Path(output)
 
     if path.exists():
@@ -102,18 +143,18 @@ def init_command(
         raise typer.Exit(code=1)
 
     if from_data:
-        try:
-            config, base_path = build_config_from_data(Path(from_data))
-        except Exception as exc:
-            typer.echo(f"Cannot read data path: {exc}")
-            raise typer.Exit(code=1) from exc
-
-        rebase_source_files(config, base_path, path.resolve().parent)
-        content = yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
+        content = config_from_data(from_data, path.resolve().parent)
+    elif from_openapi:
+        content = config_from_openapi(from_openapi)
     else:
         content = SAMPLE_CONFIG
 
     path.write_text(content, encoding="utf-8")
+
+    if from_data or from_openapi:
+        typer.echo(f"Configuration written to: {output}")
+        return
+
     typer.echo(f"Sample file created: {output}")
 
 

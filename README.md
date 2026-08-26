@@ -24,6 +24,7 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - serve a folder of JSON/CSV files as a REST API with no configuration at all
 - declare a whole CRUD resource in a few lines with `resources:`
 - generate a config from existing data with `init --from-data`
+- generate a config from an OpenAPI spec with `init --from-openapi`
 - browse the served routes at `/`
 - restart automatically on config changes with `serve --reload`
 
@@ -180,7 +181,7 @@ mkf serve mockyfast.yaml --port 8000
 ### Reference
 
 ```text
-mkf init     [--output FILE] [--from-data PATH]
+mkf init     [--output FILE] [--from-data PATH | --from-openapi FILE]
 mkf schema   [--output FILE]
 mkf openapi  CONFIG [--output FILE]
 mkf validate CONFIG
@@ -192,6 +193,7 @@ mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
 |---|---|---|
 | `init` | `--output <file>` | Where to write the config (default `mockyfast.yaml`) |
 | `init` | `--from-data <path>` | Generate the config from a data file or folder |
+| `init` | `--from-openapi <file>` | Generate the config from an OpenAPI 3 document |
 | `schema` | `-o` / `--output <file>` | Write the JSON Schema to a file instead of standard output |
 | `openapi` | `-o` / `--output <file>` | Write the OpenAPI document to a file; `.yaml` writes YAML |
 | `serve` | `--host` | Bind address (default `127.0.0.1`) |
@@ -1115,6 +1117,44 @@ the next restart; `serve --reload` restarts for you.
 
 ---
 
+### Starting from a spec
+
+The other direction: `mkf init --from-openapi` reads an OpenAPI 3 document and
+writes the routes that answer it.
+
+```bash
+mkf init --from-openapi ./openapi.yaml
+mkf serve mockyfast.yaml
+```
+
+Each operation becomes one route, answering the lowest success status the spec
+declares. Response schemas map onto the templates MockyFast already renders, so
+the mock returns plausible data instead of empty objects:
+
+| In the spec | In the config |
+|---|---|
+| an `example`, anywhere | used as written, in preference to anything generated |
+| `type: integer`, with `minimum` / `maximum` | `{{randint:min:max}}` |
+| `type: number` | `{{randfloat:min:max}}` |
+| an `enum` of strings | `{{choice:a\|b}}` |
+| `format: uuid`, `date-time`, `date` | `{{uuid}}`, `{{now}}`, `{{now:%Y-%m-%d}}` |
+| `format: email`, `uri`, `ipv4`, … | a plausible constant |
+| `type: array` | a list of two items |
+| `$ref`, `allOf`, `oneOf` | resolved, merged, and first-of respectively |
+
+An enum of numbers keeps its first value instead of becoming a `{{choice:...}}`,
+because that template hands back the text of the option it picked and the type
+would be lost.
+
+The result is a starting point rather than a translation: a spec says what an
+API **may** return, a mock says what it **does** return. Edit it.
+
+The document has to be OpenAPI 3 and self-contained. A Swagger 2.0 file, or a
+`$ref` pointing into another file, is refused with a message rather than
+half-imported.
+
+---
+
 ## Explaining a request
 
 When a request does not reach the route you expected, `mkf explain` walks the
@@ -1257,7 +1297,6 @@ ruff check .
 
 Planned improvements:
 
-- OpenAPI import, to generate mocks from an existing spec
 - an admin API to reset state and inspect received requests
 - richer body matching (JSONPath)
 - faker-style generators for names, emails and addresses

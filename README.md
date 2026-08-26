@@ -95,63 +95,7 @@ cd MockyFast
 pip install .
 ```
 
-### Editor support
-
-`mkf schema` prints a JSON Schema generated from the same models `mkf validate`
-runs, so your editor and the CLI cannot disagree about what a configuration may
-contain:
-
-```bash
-mkf schema > mockyfast.schema.json
-```
-
-The generated file is also published in this repository, at
-[`mockyfast.schema.json`](./mockyfast.schema.json), so you can point at it
-without generating anything.
-
-### One file at a time
-
-Put a modeline at the top of the configuration. The
-[YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
-for VS Code reads it, as does any editor speaking the YAML language server
-protocol:
-
-```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json
-
-version: 1
-
-routes:
-  - method: GET
-    path: /health
-    response:
-      status_code: 200
-      body:
-        ok: true
-```
-
-### Every config in a project
-
-In `.vscode/settings.json`:
-
-```json
-{
-  "yaml.schemas": {
-    "https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json": [
-      "mockyfast.yaml",
-      "mocks/**/*.yaml"
-    ]
-  }
-}
-```
-
-Either form accepts a local file too: replace the URL with
-`./mockyfast.schema.json` and the editor validates against the schema of the
-version you have installed.
-
----
-
-## Development install
+### Development install
 
 ```bash
 pip install -e ".[dev]"
@@ -1321,6 +1265,62 @@ made unreachable by an earlier, more general one.
 
 With `--against`, it goes on to compare what the mock answers with an OpenAPI
 document; see [checking a mock against the spec](#checking-a-mock-against-the-spec).
+
+---
+
+## Editor support
+
+`mkf schema` prints a JSON Schema generated from the same models `mkf validate`
+runs, so your editor and the CLI cannot disagree about what a configuration may
+contain:
+
+```bash
+mkf schema > mockyfast.schema.json
+```
+
+The generated file is also published in this repository, at
+[`mockyfast.schema.json`](./mockyfast.schema.json), so you can point at it
+without generating anything.
+
+### One file at a time
+
+Put a modeline at the top of the configuration. The
+[YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
+for VS Code reads it, as does any editor speaking the YAML language server
+protocol:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json
+
+version: 1
+
+routes:
+  - method: GET
+    path: /health
+    response:
+      status_code: 200
+      body:
+        ok: true
+```
+
+### Every config in a project
+
+In `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/Cartenone/MockyFast/main/mockyfast.schema.json": [
+      "mockyfast.yaml",
+      "mocks/**/*.yaml"
+    ]
+  }
+}
+```
+
+Either form accepts a local file too: replace the URL with
+`./mockyfast.schema.json` and the editor validates against the schema of the
+version you have installed.
 
 ---
 

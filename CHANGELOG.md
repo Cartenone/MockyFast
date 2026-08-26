@@ -44,7 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not know is refused rather than misread.
 - Every YAML example in the README, and the ten the first published README
   documented, are now loaded by the test suite, so a documented configuration
-  cannot stop being a working one.
+  cannot stop being a working one. The suite also checks that every internal
+  link in the README points at a heading that exists, and that every command
+  the CLI exposes appears in the reference.
 
 - `mkf explain CONFIG METHOD PATH` reports which route answers a request and why
   each other one does not, naming the failing query parameter, header or body

@@ -99,3 +99,50 @@ def test_every_0_1_0_readme_example_still_loads(tmp_path, path):
     block = path.read_text(encoding="utf-8")
 
     assert load_in_sandbox(tmp_path, block)["routes"]
+
+
+# ------------------------------------------------------------ the shape of it
+
+HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
+
+ANCHOR_LINK = re.compile(r"\]\(#([a-z0-9-]+)\)")
+
+FENCED_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+
+
+def prose() -> str:
+    """The README without its code blocks, where a '#' is a comment."""
+    return FENCED_BLOCK.sub("", README.read_text(encoding="utf-8"))
+
+
+def slug(heading: str) -> str:
+    """The anchor GitHub gives a heading."""
+    text = re.sub(r"[`*]", "", heading).lower()
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+
+    return re.sub(r"\s+", "-", text.strip())
+
+
+def test_every_internal_link_points_at_a_heading():
+    text = prose()
+    headings = {slug(heading) for heading in HEADING.findall(text)}
+
+    assert sorted(
+        {anchor for anchor in ANCHOR_LINK.findall(text) if anchor not in headings}
+    ) == []
+
+
+def test_every_command_appears_in_the_reference():
+    """The command table is the first thing to fall behind the CLI."""
+    from mockyfast.cli import app as cli
+
+    # The reference is itself a code block, so read the README as written.
+    text = README.read_text(encoding="utf-8")
+    reference = text.split("### Reference", 1)[1].split("\n---", 1)[0]
+
+    names = {
+        command.name or command.callback.__name__
+        for command in cli.registered_commands
+    }
+
+    assert sorted(name for name in names if f"mkf {name}" not in reference) == []

@@ -603,3 +603,13 @@ def test_cors_can_be_disabled(tmp_path):
     simple = client.get("/users", headers={"Origin": "http://localhost:3000"})
 
     assert "access-control-allow-origin" not in simple.headers
+
+
+def test_a_json_file_that_is_not_a_list_is_reported_by_name(tmp_path):
+    """Zero-config mode must not fail with a KeyError that says only '0'."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "users.json").write_text('{"users": [{"id": 1}]}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="JSON data source must contain a root list"):
+        load_config_source(str(data_dir))

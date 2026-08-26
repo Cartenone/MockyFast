@@ -1205,3 +1205,77 @@ routes:
         match="'responses.1.status_code' in route #1 must be a valid HTTP status code",
     ):
         load_config(config_path)
+
+
+# ------------------------------------------------- json data source contents
+
+
+def test_a_json_data_source_whose_root_is_an_object_is_rejected(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "users.json").write_text('{"users": [{"id": 1}]}', encoding="utf-8")
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+""",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'response.data_source.file' in route #1: JSON data source must "
+        "contain a root list",
+    ):
+        load_config(config_path)
+
+
+def test_a_json_data_source_holding_a_non_object_row_is_rejected(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "users.json").write_text('[{"id": 1}, "Mario"]', encoding="utf-8")
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      data_source:
+        type: json
+        file: ./data/users.json
+        mode: all
+""",
+    )
+
+    with pytest.raises(ValueError, match="item #2 must be an object"):
+        load_config(config_path)
+
+
+def test_a_body_from_file_may_hold_any_json_value(tmp_path):
+    responses_dir = tmp_path / "responses"
+    responses_dir.mkdir()
+    (responses_dir / "users.json").write_text(
+        '{"users": [{"id": 1}]}', encoding="utf-8"
+    )
+
+    config_path = write_config(
+        tmp_path,
+        """
+routes:
+  - method: GET
+    path: /users
+    response:
+      body_from: ./responses/users.json
+""",
+    )
+
+    assert load_config(config_path)["routes"][0]["path"] == "/users"

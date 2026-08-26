@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from mockyfast.datasources.json_source import load_json_rows
 from mockyfast.models import validate_shape
 from mockyfast.paths import resolve_data_path
 from mockyfast.resources import build_config_from_data, expand_resources
@@ -112,9 +113,10 @@ def check_referenced_files(config: dict, config_path: str) -> None:
     A JSON Schema can say that `body_from` is a string; only this can say the
     file is there, parses, and has not escaped the configuration directory.
     """
-    for route in config.get("routes") or []:
+    for index, route in enumerate(config.get("routes") or [], start=1):
         for response in iter_route_responses(route):
             if "body_from" in response:
+                # A whole body may be any JSON value, so only the parse matters.
                 load_json_file(config_path, response["body_from"])
 
             data_source = response.get("data_source")
@@ -124,8 +126,14 @@ def check_referenced_files(config: dict, config_path: str) -> None:
 
             if data_source["type"] == "csv":
                 load_csv_file_reference(config_path, data_source["file"])
-            else:
-                load_json_file(config_path, data_source["file"])
+                continue
+
+            try:
+                load_json_rows(config_path, data_source["file"])
+            except ValueError as exc:
+                raise ValueError(
+                    f"'response.data_source.file' in route #{index}: {exc}"
+                ) from exc
 
 
 def path_shadows(pattern: str, target: str) -> bool:

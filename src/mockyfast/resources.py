@@ -166,7 +166,15 @@ def detect_key_field(data_file: Path, source_type: str) -> str:
         else:
             with data_file.open("r", encoding="utf-8") as file:
                 rows = json.load(file)
-            fields = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+
+            # A file that is not a list of objects is rejected later, with a
+            # message naming the file; indexing it here would raise a KeyError
+            # that says only '0'.
+            fields = (
+                list(rows[0].keys())
+                if isinstance(rows, list) and rows and isinstance(rows[0], dict)
+                else []
+            )
     except (OSError, ValueError):
         return DEFAULT_KEY_FIELD
 

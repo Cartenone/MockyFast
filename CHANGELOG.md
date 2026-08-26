@@ -68,6 +68,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `mkf validate` accepted a JSON data source whose file was not a root list of
+  objects, and the route then answered `500` to every request. The file is now
+  read the way the server reads it, so the problem is reported before the
+  server starts, naming the route. `body_from` is unaffected: a whole response
+  body may be any JSON value.
+- In zero-config mode the same file crashed key-field detection with a
+  `KeyError` that reached the user as `Invalid configuration: 0`.
+
 - A client could redirect where `body_from` and `data_source.file` resolve from
   by passing `?_config_path=...`. The route group and config path were handed to
   the endpoint as parameter defaults, and FastAPI turns anything in an endpoint

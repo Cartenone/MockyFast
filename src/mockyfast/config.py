@@ -363,6 +363,24 @@ def validate_data_source(
             f"must be a valid JSON-compatible value."
         )
 
+    persist = data_source.get("persist")
+    if persist is not None and not isinstance(persist, (bool, str)):
+        raise ValueError(
+            f"'response.data_source.persist' in route #{index} must be a boolean "
+            f"or a path."
+        )
+
+    if persist and not data_source.get("mutable"):
+        raise ValueError(
+            f"'response.data_source.persist' in route #{index} needs 'mutable: true'."
+        )
+
+    list_query = data_source.get("list_query")
+    if list_query is not None and not isinstance(list_query, bool):
+        raise ValueError(
+            f"'response.data_source.list_query' in route #{index} must be a boolean."
+        )
+
     coerce_types = data_source.get("coerce_types")
     if coerce_types is not None and not isinstance(coerce_types, bool):
         raise ValueError(

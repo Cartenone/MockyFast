@@ -13,7 +13,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from mockyfast.config import load_config_source, load_json_file
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
+from mockyfast.listing import apply_list_query
 from mockyfast.matchers import apply_matcher, is_matcher, value_matches
+from mockyfast.persistence import read_state, resolve_state_path
 from mockyfast.state_store import InMemoryResourceStore
 from mockyfast.templating import TemplateContext, render_template
 
@@ -24,6 +26,7 @@ class ResponseOutcome:
 
     body: Any
     status_code: int
+    headers: dict[str, str] | None = None
 
 
 async def build_template_context(request: Request) -> TemplateContext:
@@ -187,6 +190,18 @@ def seed_mutable_store_for_route(
     if store.has(resource_name):
         return
 
+    persist = data_source.get("persist")
+    saved_rows = None
+
+    if persist:
+        state_path = resolve_state_path(config_path, persist, resource_name)
+        store.persist_to(resource_name, state_path)
+        saved_rows = read_state(state_path)
+
+    if saved_rows is not None:
+        store.seed(resource_name, saved_rows)
+        return
+
     if data_source["type"] == "csv":
         rows = load_csv_rows(config_path, data_source["file"])
     elif data_source["type"] == "json":
@@ -195,6 +210,11 @@ def seed_mutable_store_for_route(
         raise ValueError(f"Unsupported data source type: {data_source['type']}")
 
     store.seed(resource_name, rows)
+
+    if persist:
+        # Write the seed straight away, so the state file exists and shows what
+        # the resource started from.
+        store.flush(resource_name)
 
 
 def resolve_where_expected_value(
@@ -304,11 +324,28 @@ def build_data_source_response(
     if data_source.get("mode") == "first" and result is None:
         return build_not_found_outcome(data_source)
 
+    headers = None
+
+    if data_source.get("list_query", False) and isinstance(result, list):
+        # A query param already spoken for by 'where' must not double as a
+        # field filter.
+        consumed = set()
+        where = data_source.get("where") or {}
+        if "equals_query_param" in where:
+            consumed.add(where["equals_query_param"])
+
+        result, total = apply_list_query(result, query_params, consumed)
+        headers = {"X-Total-Count": str(total)}
+
     wrap = data_source.get("wrap")
     if wrap is not None:
         result = {wrap: result}
 
-    return ResponseOutcome(body=result, status_code=get_response_status_code(route))
+    return ResponseOutcome(
+        body=result,
+        status_code=get_response_status_code(route),
+        headers=headers,
+    )
 
 
 def build_response_body(
@@ -670,6 +707,7 @@ def create_app(
                 return JSONResponse(
                     content=outcome.body,
                     status_code=outcome.status_code,
+                    headers=outcome.headers,
                 )
 
             return JSONResponse(

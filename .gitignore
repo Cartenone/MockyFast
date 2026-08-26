@@ -12,4 +12,4 @@ build/
 .vscode/
 .idea/
 .ruff_cache/
-
+.mockyfast-state/

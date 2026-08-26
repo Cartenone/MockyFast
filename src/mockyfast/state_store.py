@@ -1,5 +1,8 @@
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
+
+from mockyfast.persistence import write_state
 
 
 def row_matches_key(row: Any, key_field: str, key_value: Any) -> bool:
@@ -12,9 +15,19 @@ def row_matches_key(row: Any, key_field: str, key_value: Any) -> bool:
 class InMemoryResourceStore:
     def __init__(self) -> None:
         self._resources: dict[str, list[dict[str, Any]]] = {}
+        self._state_paths: dict[str, Path] = {}
 
     def has(self, resource_name: str) -> bool:
         return resource_name in self._resources
+
+    def persist_to(self, resource_name: str, state_path: Path) -> None:
+        self._state_paths[resource_name] = state_path
+
+    def flush(self, resource_name: str) -> None:
+        state_path = self._state_paths.get(resource_name)
+
+        if state_path is not None:
+            write_state(state_path, self._resources.get(resource_name, []))
 
     def seed(self, resource_name: str, rows: list[dict[str, Any]]) -> None:
         if resource_name not in self._resources:
@@ -45,6 +58,8 @@ class InMemoryResourceStore:
 
         stored_payload = deepcopy(payload)
         self._resources[resource_name].append(stored_payload)
+        self.flush(resource_name)
+
         return deepcopy(stored_payload)
 
     def update(
@@ -61,6 +76,8 @@ class InMemoryResourceStore:
                 updated = deepcopy(row)
                 updated.update(payload)
                 rows[index] = updated
+                self.flush(resource_name)
+
                 return deepcopy(updated)
 
         return None
@@ -80,6 +97,8 @@ class InMemoryResourceStore:
                 replacement = deepcopy(payload)
                 replacement[key_field] = row[key_field]
                 rows[index] = replacement
+                self.flush(resource_name)
+
                 return deepcopy(replacement)
 
         return None
@@ -95,6 +114,8 @@ class InMemoryResourceStore:
         for index, row in enumerate(rows):
             if row_matches_key(row, key_field, key_value):
                 del rows[index]
+                self.flush(resource_name)
+
                 return True
 
         return False

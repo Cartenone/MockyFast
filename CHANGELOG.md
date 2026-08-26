@@ -14,6 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `{{header.x}}`, `{{body.a.b.0}}`. A string that is exactly one placeholder
   keeps the placeholder's type; an unresolvable one is left as written.
   Placeholders now also render in object keys, which `{param}` never did.
+- Filtering, sorting and paging on `mode: all` routes via `list_query`:
+  `?field=value`, `_sort`, `_order`, `_limit`, `_page`, `_offset`, plus an
+  `X-Total-Count` header carrying the pre-paging total. On by default for the
+  list route of a `resources:` entry, opt-in for an explicit route.
+- `persist` keeps a mutable resource's writes across restarts in a separate
+  state file, leaving the data file as an untouched seed.
 - Matching operators for `request.query`, `request.headers` and `request.json`:
   `equals`, `matches`, `contains`, `one_of`, `present`, `absent`, `gt`, `gte`,
   `lt`, `lte`. `mkf validate` compiles every `matches` pattern.

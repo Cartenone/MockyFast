@@ -126,6 +126,9 @@ def build_resource_routes(resource: dict, index: int) -> list[dict[str, Any]]:
 
             if action == "list":
                 data_source["mode"] = "all"
+                # Filtering, sorting and paging come for free on a shorthand
+                # resource; an explicit route has to ask for them.
+                data_source["list_query"] = resource.get("list_query", True)
                 if "wrap" in resource:
                     data_source["wrap"] = resource["wrap"]
             elif action == "get":
@@ -134,6 +137,9 @@ def build_resource_routes(resource: dict, index: int) -> list[dict[str, Any]]:
             if targets_one:
                 data_source["where"] = dict(where)
                 apply_not_found(data_source, resource)
+
+            if "persist" in resource:
+                data_source["persist"] = resource["persist"]
 
             response: dict[str, Any] = {"data_source": data_source}
 

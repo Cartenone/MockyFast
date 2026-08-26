@@ -212,7 +212,9 @@ A data source is declared under `response.data_source`:
 | `not_found_body` | no | Body used when `mode: first` finds nothing |
 | `coerce_types` | no | CSV only — infer primitive types |
 | `schema` | no | CSV only — explicit type mapping |
+| `list_query` | no | Allow filtering, sorting and paging on a `mode: all` route |
 | `mutable` | no | Serve the file from a writable in-memory store |
+| `persist` | no | Keep writes across restarts (`true`, or a path) |
 | `key_field` | with `mutable` | Primary key of the resource |
 | `resource_name` | with `mutable` | Store identity shared across routes |
 
@@ -429,6 +431,8 @@ DELETE  /users/{id}
 | `not_found_status` | no | `404` | Applied to the single-resource routes |
 | `not_found_body` | no | — | Applied to the single-resource routes |
 | `delay_ms` | no | — | Applied to every generated route |
+| `list_query` | no | `true` | Filtering, sorting and paging on the list route |
+| `persist` | no | — | Keep writes across restarts (`true`, or a path) |
 
 Resources are always stateful: they expand into `mutable` data sources sharing
 one store, so a `POST` is visible to every other route of the resource.
@@ -580,6 +584,62 @@ curl -X DELETE http://127.0.0.1:8000/users/4
 - `PUT` replaces the resource: fields absent from the body are dropped. `PATCH` merges, preserving them. The key field survives both.
 - `PUT` and `PATCH` cannot change `key_field` — attempting to do so returns `400`.
 - When `PUT`, `PATCH`, or `DELETE` match nothing, the configured `not_found_status` / `not_found_body` are used (default `404`).
+
+---
+
+## Filtering, sorting and paging
+
+A `mode: all` route with `list_query: true` reads a handful of query
+parameters. The `resources:` shorthand turns this on for the list route, so it
+works out of the box in zero-config mode; an explicit route has to ask for it.
+
+| Parameter | Meaning |
+|---|---|
+| `?field=value` | Keep rows whose `field` equals `value` |
+| `_sort=field` | Sort ascending; `_sort=a,b` sorts by several fields |
+| `_order=desc` | Reverse the sort |
+| `_limit=10` | Page size |
+| `_page=2` | Page number, 1-based, used together with `_limit` |
+| `_offset=20` | Skip rows, as an alternative to `_page` |
+
+```bash
+curl "http://127.0.0.1:8000/users?role=user&_sort=age&_limit=10&_page=2"
+```
+
+Every response carries `X-Total-Count` with the number of rows **before**
+paging, so a client can render a pager. Numbers sort before text, so a column
+holding both still comes back in a stable order. An unusable value — a
+non-numeric `_limit`, an unknown `_sort` field — is ignored rather than
+rejected.
+
+A query parameter already used by `where` is not treated as a field filter.
+
+Opt out on a resource with `list_query: false`.
+
+---
+
+## Keeping state across restarts
+
+By default a `mutable` resource starts again from its data file on every run.
+Add `persist` and writes are saved to a **separate** state file:
+
+```yaml
+resources:
+  - name: users
+    source:
+      type: json
+      file: ./data/users.json
+    persist: true
+```
+
+- `persist: true` writes to `.mockyfast-state/<name>.json` next to the config.
+- `persist: ./stato/utenti.json` writes wherever you say, as long as it stays
+  inside the configuration directory.
+
+The data file remains the **seed** and is never written to, so it stays
+versionable and readable as documentation. Delete the state file to start over.
+State files are written on every write and swapped into place atomically; add
+`.mockyfast-state/` to your `.gitignore`.
 
 ---
 

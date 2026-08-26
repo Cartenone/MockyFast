@@ -1,9 +1,11 @@
 import json
+import re
 from pathlib import Path
 
 import yaml
 
 from mockyfast.datasources.csv_source import SUPPORTED_SCHEMA_TYPES
+from mockyfast.matchers import COMPARISON_KEYS, iter_matchers
 from mockyfast.paths import resolve_data_path
 from mockyfast.resources import build_config_from_data, expand_resources
 
@@ -190,6 +192,8 @@ def validate_routes(config: dict, config_path: str) -> None:
                     f"'request.json' in route #{index} must be an object or a list."
                 )
 
+            validate_matchers(request, index)
+
         response = route["response"]
 
         if not isinstance(response, dict):
@@ -238,6 +242,32 @@ def validate_routes(config: dict, config_path: str) -> None:
             if delay_ms < 0:
                 raise ValueError(
                     f"'response.delay_ms' in route #{index} cannot be negative."
+                )
+
+
+def validate_matchers(request: dict, index: int) -> None:
+    """Catch broken matcher operators before the server starts."""
+    for matcher in iter_matchers(request):
+        if "matches" in matcher:
+            try:
+                re.compile(str(matcher["matches"]))
+            except re.error as exc:
+                raise ValueError(
+                    f"'request' in route #{index} has an invalid regular "
+                    f"expression {matcher['matches']!r}: {exc}"
+                ) from exc
+
+        if "one_of" in matcher and not isinstance(matcher["one_of"], list):
+            raise ValueError(
+                f"'one_of' in route #{index} must be a list."
+            )
+
+        for operator in COMPARISON_KEYS:
+            if operator in matcher and not isinstance(
+                matcher[operator], (int, float)
+            ):
+                raise ValueError(
+                    f"'{operator}' in route #{index} must be a number."
                 )
 
 

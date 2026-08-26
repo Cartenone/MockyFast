@@ -613,7 +613,49 @@ Response:
 }
 ```
 
-Substitution applies to string **values**, not to object keys.
+---
+
+## Response templates
+
+Besides `{path_param}`, response bodies support `{{...}}` placeholders that read
+the request or generate a value. They work in `body`, in `body_from` files, in
+nested structures, and in object **keys**.
+
+| Placeholder | Result |
+|---|---|
+| `{{uuid}}` | A random UUID v4 |
+| `{{now}}` | Current UTC time, ISO 8601 |
+| `{{now:%Y-%m-%d}}` | Current UTC time, `strftime` format |
+| `{{timestamp}}` | Current Unix time, as a number |
+| `{{randint:1:100}}` | Random integer in range |
+| `{{randfloat:0:9.99}}` | Random float in range, 2 decimals |
+| `{{choice:gold\|silver}}` | One of the options |
+| `{{path.user_id}}` | Path parameter (same as `{user_id}`) |
+| `{{query.page}}` | Query parameter |
+| `{{header.x-client}}` | Request header, case-insensitive |
+| `{{body.customer.email}}` | Request body, dotted path; list indexes work too |
+
+```yaml
+routes:
+  - method: POST
+    path: /orders/{order_id}
+    response:
+      status_code: 201
+      body:
+        id: "{{uuid}}"
+        order: "{order_id}"
+        created_at: "{{now}}"
+        quantity: "{{randint:1:5}}"
+        confirmation: "Order {order_id} for {{body.customer.email}}"
+```
+
+Two rules make the output predictable:
+
+- **A string that is exactly one placeholder keeps the placeholder's type.**
+  `"{{randint:1:5}}"` yields the number `3`, not the string `"3"`. Put the
+  placeholder inside other text and you get a string.
+- **An unknown or unresolvable placeholder is left as written.** A typo shows up
+  in the response instead of raising, which is easier to spot while iterating.
 
 ---
 
@@ -692,7 +734,51 @@ routes:
         error: invalid_credentials
 ```
 
+### Matching operators
+
+A matcher value can be an object of operators instead of a literal:
+
+```yaml
+routes:
+  - method: POST
+    path: /signup
+    request:
+      headers:
+        Authorization: { matches: '^Bearer .{8,}$' }
+      query:
+        page: { one_of: ['1', '2'] }
+      json:
+        email: { matches: '@' }
+        age: { gte: 18 }
+        referral: { absent: true }
+    response:
+      status_code: 201
+      body:
+        ok: true
+```
+
+| Operator | Meaning |
+|---|---|
+| `equals` | Exact value (the default for a plain scalar) |
+| `matches` | Regular expression, searched anywhere in the value |
+| `contains` | Substring, or membership for lists |
+| `one_of` | Value is in the given list |
+| `present: true` | Key exists, whatever its value |
+| `absent: true` | Key must not be present |
+| `gt` `gte` `lt` `lte` | Numeric comparison |
+
+Several operators in one object must all pass. An object counts as a matcher
+only when **every** key is an operator, so a nested body object such as
+`{"user": {"name": "Mario"}}` stays a structural comparison.
+
+`mkf validate` compiles every `matches` regex, so a broken pattern is caught
+before the server starts.
+
+### What is compared
+
 Matching is partial for `query` and `headers` (extra values in the request are ignored) and for object keys in `json`. Lists inside `json` must match exactly, including length.
+
+`query` and `headers` compare as text, since that is what HTTP carries: `{ equals: 2 }` matches `?page=2`. Inside `json` the comparison is typed, so `{ equals: 5 }` matches the number `5` and not the string `"5"`.
 
 ---
 

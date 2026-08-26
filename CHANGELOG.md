@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Response templates: `{{uuid}}`, `{{now}}` (with an optional `strftime`
+  format), `{{timestamp}}`, `{{randint:a:b}}`, `{{randfloat:a:b}}`,
+  `{{choice:a|b}}`, and scoped lookups `{{path.x}}`, `{{query.x}}`,
+  `{{header.x}}`, `{{body.a.b.0}}`. A string that is exactly one placeholder
+  keeps the placeholder's type; an unresolvable one is left as written.
+  Placeholders now also render in object keys, which `{param}` never did.
+- Matching operators for `request.query`, `request.headers` and `request.json`:
+  `equals`, `matches`, `contains`, `one_of`, `present`, `absent`, `gt`, `gte`,
+  `lt`, `lte`. `mkf validate` compiles every `matches` pattern.
+
 - Zero-config mode: `mkf serve ./data` derives a full CRUD API from a folder of
   `.json`/`.csv` files, or from a single data file, with no YAML at all. The key
   field is detected from the data (`id` when present, else the first column).

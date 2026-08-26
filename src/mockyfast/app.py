@@ -13,7 +13,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from mockyfast.config import load_config_source, load_json_file
 from mockyfast.datasources.csv_source import load_csv_rows, query_csv_data
 from mockyfast.datasources.json_source import load_json_rows, query_json_data
+from mockyfast.matchers import apply_matcher, is_matcher, value_matches
 from mockyfast.state_store import InMemoryResourceStore
+from mockyfast.templating import TemplateContext, render_template
 
 
 @dataclass
@@ -24,26 +26,28 @@ class ResponseOutcome:
     status_code: int
 
 
-def render_template(value, path_params: dict):
-    if isinstance(value, str):
-        try:
-            return value.format(**path_params)
-        except Exception:
-            return value
+async def build_template_context(request: Request) -> TemplateContext:
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
 
-    if isinstance(value, dict):
-        return {key: render_template(val, path_params) for key, val in value.items()}
-
-    if isinstance(value, list):
-        return [render_template(item, path_params) for item in value]
-
-    return value
+    return TemplateContext(
+        path_params=dict(request.path_params),
+        query_params=dict(request.query_params),
+        headers=dict(request.headers),
+        body=body,
+    )
 
 
 def query_matches(expected_query: dict, actual_query: dict) -> bool:
     for key, expected_value in expected_query.items():
-        actual_value = actual_query.get(key)
-        if actual_value != str(expected_value):
+        if not value_matches(
+            expected_value,
+            actual_query.get(key),
+            present=key in actual_query,
+            stringify=True,
+        ):
             return False
     return True
 
@@ -54,20 +58,41 @@ def headers_matches(expected_headers: dict, actual_headers: dict) -> bool:
     }
 
     for key, expected_value in expected_headers.items():
-        actual_value = normalized_actual_headers.get(key.lower())
-        if actual_value != str(expected_value):
+        lookup = key.lower()
+        if not value_matches(
+            expected_value,
+            normalized_actual_headers.get(lookup),
+            present=lookup in normalized_actual_headers,
+            stringify=True,
+        ):
             return False
     return True
 
 
 def json_matches(expected, actual) -> bool:
+    if is_matcher(expected):
+        return apply_matcher(expected, actual, present=True, stringify=False)
+
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return False
 
         for key, expected_value in expected.items():
-            if key not in actual:
+            present = key in actual
+
+            if is_matcher(expected_value):
+                if not apply_matcher(
+                    expected_value,
+                    actual.get(key),
+                    present=present,
+                    stringify=False,
+                ):
+                    return False
+                continue
+
+            if not present:
                 return False
+
             if not json_matches(expected_value, actual[key]):
                 return False
 
@@ -237,12 +262,14 @@ def build_not_found_outcome(data_source: dict) -> ResponseOutcome:
 def build_data_source_response(
     route: dict,
     config_path: str,
-    path_params: dict[str, Any],
-    query_params: dict[str, Any],
+    context: TemplateContext,
     store: InMemoryResourceStore,
 ) -> ResponseOutcome:
     response_config = route.get("response", {})
     data_source = response_config["data_source"]
+
+    path_params = context.path_params
+    query_params = context.query_params
 
     if data_source.get("mutable", False):
         result = query_mutable_data_source(
@@ -287,8 +314,7 @@ def build_data_source_response(
 def build_response_body(
     route: dict,
     config_path: str,
-    path_params: dict[str, Any],
-    query_params: dict[str, Any],
+    context: TemplateContext,
     store: InMemoryResourceStore,
 ) -> ResponseOutcome:
     response_config = route.get("response", {})
@@ -297,8 +323,7 @@ def build_response_body(
         return build_data_source_response(
             route=route,
             config_path=config_path,
-            path_params=path_params,
-            query_params=query_params,
+            context=context,
             store=store,
         )
 
@@ -308,7 +333,7 @@ def build_response_body(
         body = response_config.get("body", {})
 
     return ResponseOutcome(
-        body=render_template(body, path_params),
+        body=render_template(body, context),
         status_code=get_response_status_code(route),
     )
 
@@ -493,8 +518,7 @@ async def build_route_outcome(
     return build_response_body(
         route=route,
         config_path=config_path,
-        path_params=request.path_params,
-        query_params=dict(request.query_params),
+        context=await build_template_context(request),
         store=store,
     )
 

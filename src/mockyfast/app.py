@@ -1,7 +1,6 @@
 import asyncio
 import html
 import os
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -22,6 +21,7 @@ from mockyfast.faults import (
 )
 from mockyfast.listing import apply_list_query
 from mockyfast.matchers import apply_matcher, is_matcher, value_matches
+from mockyfast.openapi import build_openapi, group_routes
 from mockyfast.persistence import read_state, resolve_state_path
 from mockyfast.state_store import InMemoryResourceStore
 from mockyfast.templating import TemplateContext, render_template
@@ -774,17 +774,11 @@ def create_app(
 
     routes = config.get("routes") or []
     app.state.routes = routes
-    grouped_routes = defaultdict(list)
 
     for route in routes:
         seed_mutable_store_for_route(route, resolved_config_path, app.state.store)
 
-    for route in routes:
-        method = route["method"].upper()
-        path = route["path"]
-        grouped_routes[(method, path)].append(route)
-
-    for (method, path), route_group in grouped_routes.items():
+    for (method, path), route_group in group_routes(routes).items():
         app.add_api_route(
             path,
             build_handler(route_group, resolved_config_path),
@@ -793,6 +787,18 @@ def create_app(
 
     if with_index and not any(route["path"] == "/" for route in routes):
         add_index_route(app, routes)
+
+    document = build_openapi(config, resolved_config_path)
+
+    def openapi() -> dict:
+        """The document `/openapi.json` and `/docs` read."""
+        return document
+
+    # Every route is served by the same generic handler, so what FastAPI
+    # derives from the signatures describes none of them. Overriding the method
+    # is what FastAPI documents; filling in `openapi_schema` is not enough,
+    # because it rebuilds that cache whenever the route set has changed.
+    app.openapi = openapi
 
     return app
 

@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A real OpenAPI document, served at `/openapi.json` and browsable at `/docs`,
+  built from the configuration instead of from the handlers. It carries the
+  status codes a route can return, the shape of the rows behind it with an
+  example, the parameters it matches on, the not-found and fault responses, and
+  the body a write expects. `mkf openapi CONFIG` writes the same document
+  without starting a server, as JSON or as YAML.
+
 - `mkf schema` prints a JSON Schema of the configuration format, generated from
   the same models `mkf validate` runs. `mockyfast.schema.json` is published in
   the repository, so an editor can be pointed at it with a
@@ -67,6 +74,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the mock. Disable with `serve --no-cors`.
 
 ### Fixed
+
+- `/openapi.json` existed but described nothing: every operation was a
+  `Handler` with an empty schema, because FastAPI derives the document from the
+  endpoint signatures and every route shares one generic handler.
 
 - `mkf validate` accepted a JSON data source whose file was not a root list of
   objects, and the route then answered `500` to every request. The file is now

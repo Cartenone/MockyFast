@@ -11,12 +11,15 @@ from mockyfast.app import create_app, describe_routes
 from mockyfast.config import collect_warnings, load_config_source
 from mockyfast.explain import describe_response, explain_request
 from mockyfast.models import config_json_schema
+from mockyfast.openapi import build_openapi
 from mockyfast.resources import build_config_from_data
 
 app = typer.Typer(help="Serve API mocks from YAML")
 
 # File patterns `--reload` watches: the config itself plus the data it serves.
 RELOAD_PATTERNS = ["*.yaml", "*.yml", "*.json", "*.csv"]
+
+YAML_SUFFIXES = {".yaml", ".yml"}
 
 SAMPLE_CONFIG = """routes:
   - method: GET
@@ -134,6 +137,38 @@ def schema_command(
 
     Path(output).write_text(content + "\n", encoding="utf-8")
     typer.echo(f"Schema written to: {output}")
+
+
+@app.command("openapi")
+def openapi_command(
+    config: str = typer.Argument(..., help="Path to the YAML file, or a data file/folder"),
+    output: str = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write the document to this file instead of standard output",
+    ),
+) -> None:
+    """
+    Print the OpenAPI document describing what the mock answers.
+    """
+    loaded, resolved_path = load_or_exit(config)
+
+    document = build_openapi(loaded, resolved_path)
+
+    if output is None:
+        typer.echo(json.dumps(document, indent=2))
+        return
+
+    path = Path(output)
+
+    if path.suffix.lower() in YAML_SUFFIXES:
+        content = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    else:
+        content = json.dumps(document, indent=2) + "\n"
+
+    path.write_text(content, encoding="utf-8")
+    typer.echo(f"OpenAPI document written to: {output}")
 
 
 @app.command("validate")

@@ -52,6 +52,8 @@ No external mock platforms, no unnecessary setup — just local files, a local s
 - `explain` shows which route answers a request, and why the others do not
 - `schema` publishes a JSON Schema, for autocompletion and live validation in
   your editor
+- a real OpenAPI document at `/openapi.json`, browsable at `/docs`, built from
+  the config rather than from the handlers
 - permissive CORS by default, so a browser app can call the mock
 - automated tests with `pytest`
 
@@ -74,6 +76,7 @@ No external mock platforms, no unnecessary setup — just local files, a local s
   [notes](#behaviour-notes)
 - **Tooling**: [validation](#validation) ·
   [editor support](#editor-support) ·
+  [OpenAPI](#openapi) ·
   [explain](#explaining-a-request) ·
   [development](#development)
 
@@ -163,6 +166,7 @@ mockyfast validate mockyfast.yaml
 mockyfast serve mockyfast.yaml --port 8000
 mockyfast explain mockyfast.yaml GET /users/1
 mockyfast schema > mockyfast.schema.json
+mockyfast openapi mockyfast.yaml > openapi.json
 ```
 
 ### Short alias
@@ -178,6 +182,7 @@ mkf serve mockyfast.yaml --port 8000
 ```text
 mkf init     [--output FILE] [--from-data PATH]
 mkf schema   [--output FILE]
+mkf openapi  CONFIG [--output FILE]
 mkf validate CONFIG
 mkf serve    CONFIG [--host HOST] [--port PORT] [--reload] [--no-index] [--no-cors]
 mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
@@ -188,6 +193,7 @@ mkf explain  CONFIG METHOD TARGET [-H/--header 'Name: value']... [--body JSON]
 | `init` | `--output <file>` | Where to write the config (default `mockyfast.yaml`) |
 | `init` | `--from-data <path>` | Generate the config from a data file or folder |
 | `schema` | `-o` / `--output <file>` | Write the JSON Schema to a file instead of standard output |
+| `openapi` | `-o` / `--output <file>` | Write the OpenAPI document to a file; `.yaml` writes YAML |
 | `serve` | `--host` | Bind address (default `127.0.0.1`) |
 | `serve` | `--port` | Bind port (default `8000`) |
 | `serve` | `--reload` | Restart when the config or its data files change |
@@ -1054,6 +1060,58 @@ curl http://127.0.0.1:8000/jobs/7   # 200 done, the last entry repeats
 Each entry is a full response object: `status_code`, `body`, `body_from`,
 `delay_ms`, `fault` and templates all work inside one. The position is counted
 **per route**, not per path parameter, and resets when the server restarts.
+
+---
+
+## OpenAPI
+
+The server publishes an OpenAPI document at `/openapi.json`, and a Swagger page
+at `/docs` that reads it. Both are built from the configuration rather than from
+the handlers: every route is served by the same generic function, so a document
+derived from the code would describe none of them.
+
+```bash
+curl http://127.0.0.1:8000/openapi.json
+```
+
+Write it out without starting a server:
+
+```bash
+mkf openapi mockyfast.yaml > openapi.json
+mkf openapi mockyfast.yaml -o openapi.yaml
+```
+
+The `.yaml` suffix decides the format.
+
+### What ends up in the document
+
+| From the config | In the document |
+|---|---|
+| the rows of a data source | the response schema, with an example |
+| `mode: all` / `mode: first` | an array, or a single object |
+| `wrap` | the key the result sits under |
+| `status_code`, and each entry of a `responses:` sequence | one response each |
+| `not_found_status` / `not_found_body` | the not-found response |
+| `fault` | the fault status and its body |
+| a mutable resource | `400` and `409` on writes, and the body a write expects |
+| `list_query` | `_limit`, `_page`, `_offset`, `_sort`, `_order`, `X-Total-Count` |
+| `request.query` / `request.headers` | query and header parameters |
+| `request.json` | the request body schema |
+| `where` | which field the path or query parameter selects |
+| several routes on one path | one operation, described in matching order |
+
+Types are read off the data, so a CSV column stays a string until `coerce_types`
+or `schema` says otherwise, and `"{{randint:1:5}}"` is documented as an integer
+because that is what it renders to. A matching operator such as `{ gte: 18 }`
+constrains a value without naming its type, so it is left unconstrained.
+
+Nothing in the document is a contract the server enforces: it describes what the
+mock answers, and it is inferred, so a data file it cannot read costs a schema
+rather than a running server.
+
+The document is built when the server starts. Editing a non-mutable data file
+changes what the routes answer immediately, but the document catches up only on
+the next restart; `serve --reload` restarts for you.
 
 ---
 
